@@ -1,4 +1,4 @@
-# ECU Guardian: End-to-End System Architecture & Workflow Guide
+# Autovue: End-to-End System Architecture & Workflow Guide
 
 This document provides an exhaustive, end-to-end technical explanation of how the **ECU Guardian Backend** operates. It covers system motivation, architecture, data flow, telemetry simulation, machine learning inference engines, real-time streaming, and API protocols.
 
@@ -6,7 +6,7 @@ This document provides an exhaustive, end-to-end technical explanation of how th
 
 ## 1. System Mission & Core Philosophy
 
-**ECU Guardian** is an automotive telemetry and predictive intelligence platform developed under the *Smart Vehicle ECU Monitoring and Predictive Maintenance* project (VTU, Dept. of ICBS, St Joseph Engineering College).
+**AutoVue** is an automotive telemetry and predictive intelligence platform developed under the *Smart Vehicle ECU Monitoring and Predictive Maintenance* project (VTU, Dept. of ICBS, St Joseph Engineering College).
 
 ### The Problem
 Traditional automotive telemetry development faces two major hurdles:
@@ -14,7 +14,7 @@ Traditional automotive telemetry development faces two major hurdles:
 2. **Disconnected Diagnostics**: Existing commercial OBD-II scanners only report Diagnostic Trouble Codes (DTCs) after a catastrophic threshold breach has already occurred, offering little real-time assessment of driver stress or early mechanical degradation.
 
 ### The Unified Solution
-ECU Guardian combines two core subsystems into a single unified, deployable FastAPI application:
+AutoVue combines two core subsystems into a single unified, deployable FastAPI application:
 1. **Real-Time OBD-II Simulator**: Replays high-resolution, multi-sensor driving datasets (CSV/XLSX) row-by-row with controllable playback speed ($0.5\times$ to $10\times$), looping, pausing, and live WebSocket broadcasting.
 2. **Machine Learning Intelligence Hub**: Stateless, low-latency endpoints that ingest sensor telemetry to classify:
    - **Driver Behavior**: Profiling aggression levels (`Economical`, `Moderate`, `Harsh`) over rolling windows.
