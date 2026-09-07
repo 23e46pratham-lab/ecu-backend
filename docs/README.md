@@ -13,7 +13,8 @@ Part of the *Smart Vehicle ECU Monitoring and Predictive Maintenance* major proj
 ## Table of Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
+- [Architecture & End-to-End Workflow](#architecture--end-to-end-workflow)
+- [Documentation & Model Deep-Dives](#documentation--model-deep-dives)
 - [Why the simulator and ML API are merged](#why-the-simulator-and-ml-api-are-merged)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
@@ -34,62 +35,127 @@ Part of the *Smart Vehicle ECU Monitoring and Predictive Maintenance* major proj
 
 ## Overview
 
-This service exposes two things behind a single base URL:
+This service exposes two core automotive systems behind a single base URL:
 
-1. **Machine learning inference** — classifies driver behaviour and vehicle
-   health from OBD-II parameter windows.
-2. **An OBD-II simulator** — plays back a recorded vehicle dataset row by
-   row, in real time, over REST and WebSockets, so a frontend or ML
-   pipeline can be built and demoed without a physical vehicle or adapter.
+1. **Machine learning inference** — classifies driver behaviour (rolling window) and vehicle health (powertrain snapshot) from OBD-II parameters.
+2. **An OBD-II simulator** — plays back recorded vehicle datasets row by row, in real time, over REST and WebSockets, so frontend dashboards or client applications can be built and evaluated without physical vehicle hardware.
 
-Both are independently useful and independently testable, but ship as one
-process so the whole project has a single deployment and a single URL.
+Both are independently useful and modular, but ship as one process to enable single-click deployment with zero double cold-starts.
 
-## Architecture
+---
 
+## Architecture & End-to-End Workflow
+
+### High-Level System Architecture
+
+```mermaid
+flowchart TD
+    subgraph ClientLayer["Clients & Presentation"]
+        DASH["Built-in Dashboard (dashboard.html)"]
+        CLIENT["External Web/Mobile Frontend"]
+    end
+
+    subgraph FastAPIServer["FastAPI Application (app/main.py)"]
+        SYS["System Endpoints (/health, /docs)"]
+        ML_ROUTER["ML API Router (/api/driver/*, /api/health/*)"]
+        SIM_ROUTER["Simulator REST Router (/api/start, /api/status, ...)"]
+        WS_LIVE["WebSocket (/api/ws/live)"]
+        WS_LOGS["WebSocket (/api/ws/logs)"]
+    end
+
+    subgraph MLSubsystem["Machine Learning Engines (app/ml/)"]
+        KM["Driver Behavior Engine
+        - Rolling Window Preprocessing
+        - StandardScaler + KMeans"]
+        RF["Vehicle Health Engine
+        - 8-PID Telemetry Vector
+        - StandardScaler + Random Forest"]
+    end
+
+    subgraph SimSubsystem["Simulator Engine (app/simulator/)"]
+        DM["Dataset Manager
+        - Header Normalization
+        - Missing Value Handling"]
+        PE["Playback Engine
+        - Asyncio Loop & State Machine
+        - 500-tick Ring Buffer"]
+    end
+
+    DASH & CLIENT --> FastAPIServer
+    SIM_ROUTER --> PE
+    PE <--> DM
+    PE --> WS_LIVE & WS_LOGS
+    ML_ROUTER --> KM & RF
 ```
-                    ┌─────────────────────────────┐
-                    │        FastAPI App          │
-                    │        (app/main.py)        │
-                    └──────────────┬──────────────┘
-                                   │
-              ┌────────────────────┴────────────────────┐
-              │                                          │
-    ┌─────────▼─────────┐                     ┌──────────▼──────────┐
-    │      ML API        │                     │   OBD-II Simulator   │
-    │    (app/ml/)        │                     │  (app/simulator/)     │
-    │                     │                     │                       │
-    │ • KMeans driver     │                     │ • Dataset loader      │
-    │   behaviour model   │                     │ • Playback engine     │
-    │ • Random Forest      │                     │ • REST control API   │
-    │   health classifier  │                     │ • WebSocket streaming │
-    └─────────────────────┘                     └───────────────────────┘
+
+### End-to-End Data & Inference Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Client Dashboard
+    participant API as FastAPI (app/main.py)
+    participant Sim as Simulator Engine
+    participant WS as WebSocket Hub (/api/ws/live)
+    participant ML as ML Inference Engine
+
+    User->>API: POST /api/start {speed: 1.0, loop: true}
+    API->>Sim: Start background playback loop
+    Sim-->>API: 200 OK (state: running)
+    API-->>User: Status update
+
+    loop Every Playback Tick (dt / speed)
+        Sim->>Sim: Read row, normalize headers & impute missing
+        Sim->>WS: Broadcast standardized telemetry tick
+        WS-->>User: Live tick (rpm, speed, coolant, throttle, ...)
+    end
+
+    rect rgb(240, 248, 255)
+        Note over User,ML: Driver Behavior Classification (Rolling Window)
+        User->>API: POST /api/driver/predict {rpm[], speed[], throttle[]}
+        API->>ML: Compute std, mad, accel range -> Scale -> KMeans
+        ML-->>API: {cluster_id, behaviour_class: "Economical"|"Moderate"|"Harsh"}
+        API-->>User: 200 OK Driver Profile
+    end
+
+    rect rgb(255, 245, 238)
+        Note over User,ML: Instantaneous Powertrain Health Classification
+        User->>API: POST /api/health/predict {8 sensor parameters}
+        API->>ML: Scale -> Random Forest ensemble voting
+        ML-->>API: {status: "Normal"|"Warning"|"Critical", confidence, probabilities}
+        API-->>User: 200 OK Vehicle Health
+    end
 ```
 
-The two halves don't import from each other. Nothing in `app/ml/` knows
-the simulator exists, and nothing in `app/simulator/` knows the ML models
-exist — `app/main.py` is the only place they're wired together, currently
-just by being mounted on the same app.
+The two halves don't import from each other. Nothing in `app/ml/` knows the simulator exists, and nothing in `app/simulator/` knows the ML models exist — `app/main.py` is the only place they are wired together.
+
+---
+
+## Documentation & Model Deep-Dives
+
+Detailed technical documentation and model specifications are maintained right here in the `docs/` directory:
+
+- 📖 **[End-to-End System Architecture Guide](end_to_end_system_architecture.md)** — Comprehensive deep dive into the simulation engine, event distribution, data normalization dictionaries, and complete API specifications.
+- 🤖 **[K-Means Driver Behavior Model](kmeans_driver_behavior.md)** — Explains the 6-D statistical feature engineering (std, MAD, acceleration dynamic range), normalization, cluster mapping, and inference lifecycle.
+- 🌲 **[Random Forest Vehicle Health Model](random_forest_vehicle_health.md)** — Explains the 8-sensor powertrain telemetry features, ensemble probability estimation, confidence metrics, and physical fault signatures.
+- 🔬 **[Hybrid LSTM + Random Forest Pipeline](driver_behaviour_lstm_rf.md)** — Architectural design for the next-generation hybrid sequence-labelling pipeline.
+
+---
 
 ## Why the simulator and ML API are merged
 
 Deployed as one Render/Railway free-tier service instead of two, because:
 
-- **One cold start, not two.** Free-tier services sleep after ~15 minutes
-  of inactivity. Two separate services means two independent wake-up
-  delays (30–60s each) — if a demo request happens to hit whichever one is
-  still asleep, that's a hang at the worst possible moment. One service,
-  one wake-up.
-- **One URL for the frontend.** No cross-origin configuration between
-  "your own two backends."
-- **No real reason to split them yet.** The simulator only needs to be its
-  own service once it's replaced by real hardware or needs to scale past a
-  single demo vehicle — see [Extending the System](#extending-the-system).
+- **One cold start, not two.** Free-tier services sleep after ~15 minutes of inactivity. Two separate services means two independent wake-up delays (30–60s each) — if a demo request happens to hit whichever one is still asleep, that's a hang at the worst possible moment. One service, one wake-up.
+- **One URL for the frontend.** No cross-origin configuration between "your own two backends."
+- **No real reason to split them yet.** The simulator only needs to be its own service once it's replaced by real hardware or needs to scale past a single demo vehicle — see [Extending the System](#extending-the-system).
+
+---
 
 ## Project Structure
 
 ```
-ecu-backend-merged/
+ecu-backend/
 ├── app/
 │   ├── main.py                      # Entry point — mounts both APIs, no route collisions
 │   ├── ml/
@@ -106,13 +172,24 @@ ecu-backend-merged/
 │   └── static/
 │       └── dashboard.html            # Built-in control dashboard (single file, no build step)
 ├── datasets/                        # Bundled sample OBD-II datasets
-├── uploads/                         # User-uploaded datasets (gitignored, not persistent on free tier)
+├── docs/                            # Comprehensive technical documentation & model specifications
+│   ├── README.md                    # This primary project guide & docs hub
+│   ├── end_to_end_system_architecture.md # Full end-to-end system guide & workflow
+│   ├── kmeans_driver_behavior.md    # K-Means driver behavior model doc
+│   ├── random_forest_vehicle_health.md # Random Forest health classifier doc
+│   └── driver_behaviour_lstm_rf.md  # Next-gen LSTM + RF hybrid pipeline doc
 ├── models/                          # Trained model artifacts (.joblib / .pkl)
+│   ├── kmeans_driver_behavior_model.joblib
+│   ├── standard_scaler_driver_behavior.joblib
+│   ├── random_forest_health.pkl
+│   └── scaler_health.pkl
+├── uploads/                         # User-uploaded datasets (gitignored)
 ├── requirements.txt
 ├── Dockerfile
-├── run.py                            # Local dev entrypoint
-└── README.md
+└── run.py                           # Local dev entrypoint
 ```
+
+---
 
 ## Getting Started
 
@@ -123,7 +200,7 @@ ecu-backend-merged/
 ### Installation
 ```bash
 git clone <your-repo-url>
-cd ecu-backend-merged
+cd ecu-backend
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -464,6 +541,8 @@ uvicorn app.main:app --port 8000
 ngrok http 8000        # or: npx localtunnel --port 8000
 ```
 
+---
+
 ## Extending the System
 
 ### Adding a real OBD-II adapter
@@ -481,6 +560,8 @@ its own Render service, and point the frontend at two base URLs instead of
 one. No internal rewrite required — this is exactly why it stayed a
 self-contained package instead of being fused directly into `main.py`.
 
+---
+
 ## Roadmap
 
 - [ ] Wire simulator ticks directly into `/api/health/predict` so health
@@ -492,6 +573,8 @@ self-contained package instead of being fused directly into `main.py`.
 - [ ] Fuel efficiency prediction
 - [ ] DTC (Diagnostic Trouble Code) retrieval and decoding
 - [ ] Persistent storage (PostgreSQL) and auth (JWT + bcrypt)
+
+---
 
 ## License
 
