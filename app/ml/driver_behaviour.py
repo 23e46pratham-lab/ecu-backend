@@ -21,6 +21,13 @@ MODEL_DIR = Path(__file__).parent.parent.parent / "models"
 
 # ---------- Load artefacts once at import time ----------
 _model    = joblib.load(MODEL_DIR / "driver_model.pkl")
+
+# Force model to use exactly 1 CPU thread for inference.
+# (The model was trained with n_jobs=-1, which spawns multiple Python worker processes
+# on every single prediction, causing massive CPU spikes and logging issues on small batches).
+if hasattr(_model, "n_jobs"):
+    _model.n_jobs = 1
+
 _scaler   = joblib.load(MODEL_DIR / "driver_scaler.pkl")
 with open(MODEL_DIR / "driver_metadata.json") as _f:
     _meta = json.load(_f)

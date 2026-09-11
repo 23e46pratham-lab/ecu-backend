@@ -24,6 +24,9 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
+# Limit TensorFlow to 1 thread (prevents 100% CPU spikes for small batch inference)
+tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.threading.set_intra_op_parallelism_threads(1)
 
 class ScaledDotProductAttention(layers.Layer):
     """Single-head scaled dot-product self-attention — matches training architecture."""

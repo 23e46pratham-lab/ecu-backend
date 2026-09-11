@@ -18,6 +18,9 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 
+# Limit PyTorch to 1 thread (prevents 100% CPU spikes for small batch inference)
+torch.set_num_threads(1)
+
 MODEL_DIR = Path(__file__).parent.parent.parent / "models"
 
 
@@ -131,10 +134,13 @@ def classify_vehicle_health(tick_window: list[dict]) -> dict:
 
     feature_errors = {col: float(per_feature_error[i]) for i, col in enumerate(FEATURE_COLS)}
 
+    # Relax the ultra-strict training thresholds to prevent false positives on normal data
+    SENSITIVITY_MULTIPLIER = 2.0 
+
     # Anomaly flag: any feature exceeds its individual threshold
     triggered = [
         col for i, col in enumerate(FEATURE_COLS)
-        if per_feature_error[i] > _per_feature_thresholds.get(col, float("inf"))
+        if per_feature_error[i] > (_per_feature_thresholds.get(col, float("inf")) * SENSITIVITY_MULTIPLIER)
     ]
     is_anomaly = len(triggered) > 0
 
