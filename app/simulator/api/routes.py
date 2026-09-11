@@ -159,6 +159,14 @@ def get_history(limit: int = 100):
     return {"history": simulator.get_history(limit)}
 
 
+@router.get("/ml/latest")
+def get_latest_ml():
+    """Returns the ML inference results attached to the most recent simulator tick."""
+    if not simulator.latest_row:
+        raise HTTPException(404, "No data yet — start the simulator first")
+    return simulator.latest_row.get("ml", {})
+
+
 def _status_dict(status) -> dict:
     return {
         "state": status.state.value,

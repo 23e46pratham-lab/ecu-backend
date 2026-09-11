@@ -1,9 +1,12 @@
 fastapi>=0.111
 uvicorn[standard]>=0.29
-numpy>=2.0
+numpy>=1.26
 pandas>=2.2
 scikit-learn>=1.5
 joblib>=1.4
+xgboost>=2.0
+torch>=2.2
+tensorflow>=2.16
 python-multipart>=0.0.9
 pydantic>=2.7
 openpyxl>=3.1

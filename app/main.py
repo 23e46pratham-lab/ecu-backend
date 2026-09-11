@@ -1,7 +1,7 @@
 """
 Merged entrypoint: runs the ECU Guardian ML API (driver behaviour + health
-classification) and the OBD-II simulator (dataset playback + streaming) in
-a single FastAPI app / single process / single Render service.
+classification + fuel estimation) and the OBD-II simulator (dataset playback
++ streaming) in a single FastAPI app / single process / single Render service.
 
 Why merged (see chat discussion): avoids double cold-starts on Render's
 free tier and keeps one URL for the frontend. The simulator lives under
@@ -12,8 +12,9 @@ internal rewrite needed.
 
 Route map (no collisions):
   /health                     - shared health check
-  /api/driver/predict         - ML: driver behaviour (KMeans)
-  /api/health/predict         - ML: vehicle health classification (RF)
+  /api/driver/predict         - ML: driver behaviour (XGBoost)
+  /api/health/predict         - ML: ECU anomaly detection (LSTM Autoencoder, sequence input)
+  /api/fuel/predict           - ML: fuel consumption rate (BiLSTM)
   /api/datasets, /api/upload,
   /api/start, /api/status,
   /api/live-data, /api/ws/live, ...  - simulator (see app/simulator/api/routes.py)
@@ -21,7 +22,12 @@ Route map (no collisions):
 """
 import asyncio
 import logging
+import warnings
 from typing import List
+
+# Suppress specific harmless ML warnings to keep logs clean and save log buffer space
+warnings.filterwarnings("ignore", message=".*sklearn\.utils\.parallel\.delayed.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*X does not have valid feature names.*", category=UserWarning)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +37,7 @@ from pydantic import BaseModel
 
 from app.ml.driver_behaviour import predict_from_raw_window
 from app.ml.health_classifier import classify_vehicle_health
+from app.ml.fuel_estimator import estimate_fuel
 
 from app.simulator.api.routes import router as simulator_router
 from app.simulator.api.websocket import telemetry_manager, log_manager
@@ -42,7 +49,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ecu_guardian")
 
-app = FastAPI(title="ECU Guardian API", version="1.1.0")
+app = FastAPI(title="ECU Guardian API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,24 +58,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- ML endpoints (unchanged from the original backend) ----------------
+# ---------------- Pydantic request models ----------------
 
+# ── Driver behaviour ─────────────────────────────────────────────────────────
 class WindowRequest(BaseModel):
-    rpm_values: List[float]
-    speed_values: List[float]
-    throttle_values: List[float]
+    rpm_values:      List[float]
+    speed_values:    List[float]
+    throttle_values: List[float]   # also used as pedal proxy
+    window_index:    int = 0       # optional monotonic window counter
 
 
-class HealthSnapshotRequest(BaseModel):
-    rpm: float
-    throttle_pos: float
-    map_kpa: float
-    maf: float
-    coolant_temp: float
-    intake_air_temp: float
-    ambient_temp: float
-    pedal_d: float
+# ── Health anomaly detection ─────────────────────────────────────────────────
+class HealthTick(BaseModel):
+    # Include every field the LSTM was trained on.
+    # Fields not recognised by the model are ignored; missing fields default to 0.0.
+    rpm:             float = 0.0
+    vss:             float = 0.0
+    maf:             float = 0.0
+    throttle_pos:    float = 0.0
+    map_kpa:         float = 0.0
+    coolant_temp:    float = 0.0
+    intake_air_temp: float = 0.0
+    ambient_temp:    float = 0.0
+    pedal_d:         float = 0.0
+    pedal_e:         float = 0.0
 
+class HealthSequenceRequest(BaseModel):
+    ticks: List[HealthTick]   # must be >= 24 items
+
+
+# ── Fuel estimation ──────────────────────────────────────────────────────────
+class FuelTick(BaseModel):
+    rpm:          float = 0.0
+    vss:          float = 0.0
+    maf:          float = 0.0
+    throttle_pos: float = 0.0
+    map_kpa:      float = 0.0
+    pedal_d:      float = 0.0
+    pedal_e:      float = 0.0
+
+class FuelWindowRequest(BaseModel):
+    ticks: List[FuelTick]    # must be >= 20 items
+
+
+# ---------------- ML endpoints ----------------
 
 @app.get("/health")
 def health():
@@ -76,11 +109,16 @@ def health():
 
 
 @app.post("/api/driver/predict")
-def predict(body: WindowRequest):
+def predict_driver(body: WindowRequest):
     try:
         if len(body.rpm_values) < 5:
-            raise HTTPException(status_code=400, detail="Not enough data points")
-        return predict_from_raw_window(body.rpm_values, body.speed_values, body.throttle_values)
+            raise HTTPException(status_code=400, detail="Need at least 5 data points")
+        return predict_from_raw_window(
+            body.rpm_values,
+            body.speed_values,
+            body.throttle_values,
+            body.window_index,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -88,9 +126,23 @@ def predict(body: WindowRequest):
 
 
 @app.post("/api/health/predict")
-def predict_health(body: HealthSnapshotRequest):
+def predict_health(body: HealthSequenceRequest):
     try:
-        return classify_vehicle_health(body.dict())
+        tick_dicts = [t.dict() for t in body.ticks]
+        return classify_vehicle_health(tick_dicts)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/fuel/predict")
+def predict_fuel(body: FuelWindowRequest):
+    try:
+        tick_dicts = [t.dict() for t in body.ticks]
+        return estimate_fuel(tick_dicts)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

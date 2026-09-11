@@ -1,0 +1,39 @@
+{
+  "model_name": "Random Forest",
+  "test_accuracy": 0.8890649762282092,
+  "cv_accuracy": 0.8865077440144139,
+  "label_names": [
+    "Aggressive",
+    "Economical",
+    "Moderate"
+  ],
+  "feature_cols": [
+    "window",
+    "avg_speed",
+    "vs_dev",
+    "mean_rpm",
+    "rpm_std",
+    "mean_pedal",
+    "pedal_std",
+    "max_speed",
+    "accel_std"
+  ],
+  "window_seconds": 60,
+  "thresholds": {
+    "HARSH_ACCEL_G": 0.3,
+    "HARSH_BRAKE_G": -0.35,
+    "HIGH_RPM_THRESHOLD": 3000,
+    "HARSH_PEDAL_JUMP": 25,
+    "HIGH_SPEED_BRAKE_KMH": 55
+  },
+  "tts_messages": {
+    "Economical": "Great driving! You are being smooth and fuel-efficient. Keep it up.",
+    "Moderate": "Your driving is acceptable. Watch your speed variations and try to accelerate more gently.",
+    "Aggressive": "Warning: harsh driving detected. Please brake gently, avoid sudden acceleration, and reduce your speed."
+  },
+  "use_scaler_for": [
+    "SVM (linear)",
+    "AdaBoost"
+  ],
+  "needs_scaling": false
+}

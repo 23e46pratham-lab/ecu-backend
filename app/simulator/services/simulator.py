@@ -20,6 +20,11 @@ from typing import Callable
 from app.simulator import config
 from app.simulator.services.dataset_manager import LoadedDataset, dataset_manager
 
+# ML model inference functions
+from app.ml.driver_behaviour import predict_from_raw_window
+from app.ml.health_classifier import classify_vehicle_health
+from app.ml.fuel_estimator import estimate_fuel
+
 logger = logging.getLogger("obd_simulator.simulator")
 
 
@@ -61,6 +66,13 @@ class Simulator:
         self._log_subscribers: list[Callable] = []
         self._latest_row: dict = {}
         self._history: list[dict] = []
+
+        # Rolling buffer for ML inference
+        self._tick_buffer: list[dict] = []
+        self._HEALTH_SEQ_LEN    = 24          # must match LSTM training
+        self._FUEL_WINDOW_SIZE  = 20          # must match Fuel LSTM training
+        self._DRIVER_WINDOW_MIN = 30          # min ticks before driver inference runs
+        self._driver_window_index = 0         # monotonic counter
 
     # ---------- subscription (used by the WebSocket layer) ----------
 
@@ -115,6 +127,8 @@ class Simulator:
         self._status.dataset_duration_seconds = ds.duration_seconds
         self._status.current_row = 0
         self._status.elapsed_playback_seconds = 0.0
+        self._tick_buffer.clear()
+        self._driver_window_index = 0
         self._emit_log("info", f"Dataset loaded: {ds.name} ({ds.row_count} rows, "
                                 f"~{ds.duration_seconds:.0f}s)")
 
@@ -161,6 +175,8 @@ class Simulator:
             self._task.cancel()
         self._status.state = SimState.STOPPED
         self._pause_event.set()
+        self._tick_buffer.clear()
+        self._driver_window_index = 0
         self._emit_log("info", "Streaming stopped")
         return self._status
 
@@ -226,6 +242,46 @@ class Simulator:
                         "pedal_e": _safe_float(row.get("pedal_e")),
                     },
                 }
+
+                # ── Accumulate tick in the rolling buffer ──────────────────────
+                self._tick_buffer.append(payload["data"])
+                max_buf = max(self._HEALTH_SEQ_LEN, self._FUEL_WINDOW_SIZE, self._DRIVER_WINDOW_MIN)
+                if len(self._tick_buffer) > max_buf:
+                    self._tick_buffer.pop(0)
+
+                # ── Run ML inference (errors swallowed so simulator never crashes) ──
+                ml_results = {}
+
+                # Driver behaviour — runs once we have enough ticks
+                if len(self._tick_buffer) >= self._DRIVER_WINDOW_MIN:
+                    buf = self._tick_buffer
+                    rpm_vals   = [t.get("rpm",          0.0) for t in buf]
+                    speed_vals = [t.get("vss",          0.0) for t in buf]
+                    pedal_vals = [t.get("throttle_pos", 0.0) for t in buf]
+                    try:
+                        ml_results["driver_behaviour"] = predict_from_raw_window(
+                            rpm_vals, speed_vals, pedal_vals, self._driver_window_index
+                        )
+                        self._driver_window_index += 1
+                    except Exception as exc:
+                        ml_results["driver_behaviour"] = {"error": str(exc)}
+
+                # Health anomaly detection — needs 24 ticks
+                if len(self._tick_buffer) >= self._HEALTH_SEQ_LEN:
+                    try:
+                        ml_results["health"] = classify_vehicle_health(self._tick_buffer)
+                    except Exception as exc:
+                        ml_results["health"] = {"error": str(exc)}
+
+                # Fuel estimation — needs 20 ticks
+                if len(self._tick_buffer) >= self._FUEL_WINDOW_SIZE:
+                    try:
+                        ml_results["fuel"] = estimate_fuel(self._tick_buffer)
+                    except Exception as exc:
+                        ml_results["fuel"] = {"error": str(exc)}
+
+                # ── Attach ML results to the tick payload ─────────────────────
+                payload["ml"] = ml_results
 
                 self._latest_row = payload
                 self._history.append(payload)
