@@ -35,10 +35,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.ml.driver_behaviour import predict_from_raw_window
-from app.ml.health_classifier import classify_vehicle_health
-from app.ml.fuel_estimator import estimate_fuel
-
 from app.simulator.api.routes import router as simulator_router
 from app.simulator.api.websocket import telemetry_manager, log_manager
 from app.simulator.services.simulator import simulator
@@ -110,6 +106,7 @@ def health():
 
 @app.post("/api/driver/predict")
 def predict_driver(body: WindowRequest):
+    from app.ml.driver_behaviour import predict_from_raw_window
     try:
         if len(body.rpm_values) < 5:
             raise HTTPException(status_code=400, detail="Need at least 5 data points")
@@ -127,6 +124,7 @@ def predict_driver(body: WindowRequest):
 
 @app.post("/api/health/predict")
 def predict_health(body: HealthSequenceRequest):
+    from app.ml.health_classifier import classify_vehicle_health
     try:
         tick_dicts = [t.dict() for t in body.ticks]
         return classify_vehicle_health(tick_dicts)
@@ -138,6 +136,7 @@ def predict_health(body: HealthSequenceRequest):
 
 @app.post("/api/fuel/predict")
 def predict_fuel(body: FuelWindowRequest):
+    from app.ml.fuel_estimator import estimate_fuel
     try:
         tick_dicts = [t.dict() for t in body.ticks]
         return estimate_fuel(tick_dicts)
@@ -171,6 +170,18 @@ simulator.subscribe_logs(_on_log)
 
 @app.on_event("startup")
 async def on_startup():
+    def _preload_ml():
+        try:
+            import app.ml.driver_behaviour
+            import app.ml.health_classifier
+            import app.ml.fuel_estimator
+            logger.info("Background ML models preloaded.")
+        except Exception as e:
+            logger.error("Error preloading ML models: %s", e)
+
+    # Defer heavy framework loading to startup event so port can bind, loading in background
+    asyncio.get_running_loop().run_in_executor(None, _preload_ml)
+    
     try:
         simulator.load_dataset()
         logger.info("Simulator: default dataset pre-loaded. POST /api/start to begin streaming.")

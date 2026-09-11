@@ -2,7 +2,7 @@ fastapi>=0.111
 uvicorn[standard]>=0.29
 numpy>=1.26
 pandas>=2.2
-scikit-learn>=1.5
+scikit-learn==1.6.1
 joblib>=1.4
 xgboost>=2.0
 torch>=2.2

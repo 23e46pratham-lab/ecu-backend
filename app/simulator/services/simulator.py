@@ -20,11 +20,6 @@ from typing import Callable
 from app.simulator import config
 from app.simulator.services.dataset_manager import LoadedDataset, dataset_manager
 
-# ML model inference functions
-from app.ml.driver_behaviour import predict_from_raw_window
-from app.ml.health_classifier import classify_vehicle_health
-from app.ml.fuel_estimator import estimate_fuel
-
 logger = logging.getLogger("obd_simulator.simulator")
 
 
@@ -259,6 +254,7 @@ class Simulator:
                     speed_vals = [t.get("vss",          0.0) for t in buf]
                     pedal_vals = [t.get("throttle_pos", 0.0) for t in buf]
                     try:
+                        from app.ml.driver_behaviour import predict_from_raw_window
                         ml_results["driver_behaviour"] = predict_from_raw_window(
                             rpm_vals, speed_vals, pedal_vals, self._driver_window_index
                         )
@@ -269,6 +265,7 @@ class Simulator:
                 # Health anomaly detection — needs 24 ticks
                 if len(self._tick_buffer) >= self._HEALTH_SEQ_LEN:
                     try:
+                        from app.ml.health_classifier import classify_vehicle_health
                         ml_results["health"] = classify_vehicle_health(self._tick_buffer)
                     except Exception as exc:
                         ml_results["health"] = {"error": str(exc)}
@@ -276,6 +273,7 @@ class Simulator:
                 # Fuel estimation — needs 20 ticks
                 if len(self._tick_buffer) >= self._FUEL_WINDOW_SIZE:
                     try:
+                        from app.ml.fuel_estimator import estimate_fuel
                         ml_results["fuel"] = estimate_fuel(self._tick_buffer)
                     except Exception as exc:
                         ml_results["fuel"] = {"error": str(exc)}
