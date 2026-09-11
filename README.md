@@ -1,11 +1,14 @@
-# ECU Guardian Backend
+# AutoVue Backend
 
-**ML-powered vehicle health API + OBD-II data simulator, in one deployable FastAPI service.**
+**ML-powered vehicle diagnostics API + OBD-II data simulator, in one deployable FastAPI service.**
 
-Part of the *Smart Vehicle ECU Monitoring and Predictive Maintenance* major project (VTU, Dept. of ICBS, St Joseph Engineering College).
+Part of the *AutoVue — Smart Vehicle ECU Monitoring and Predictive Maintenance* major project (VTU, Dept. of ICBS, St Joseph Engineering College).
 
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg)](https://fastapi.tiangolo.com/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.2-EE4C2C.svg)](https://pytorch.org/)
+[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.16-FF6F00.svg)](https://www.tensorflow.org/)
+[![XGBoost](https://img.shields.io/badge/XGBoost-2.0-337AB7.svg)](https://xgboost.readthedocs.io/)
 [![License](https://img.shields.io/badge/license-Academic--Project-lightgrey.svg)](#license)
 
 ---
@@ -14,17 +17,18 @@ Part of the *Smart Vehicle ECU Monitoring and Predictive Maintenance* major proj
 
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [Why the simulator and ML API are merged](#why-the-simulator-and-ml-api-are-merged)
+- [ML Models](#ml-models)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [API Reference](#api-reference)
   - [Machine Learning Endpoints](#machine-learning-endpoints)
   - [Simulator — Dataset Management](#simulator--dataset-management)
   - [Simulator — Playback Control](#simulator--playback-control)
-  - [Simulator — Live Data](#simulator--live-data)
+  - [Simulator — Live Data & ML](#simulator--live-data--ml)
   - [Simulator — WebSockets](#simulator--websockets)
   - [System](#system)
 - [Standard Sensor Field Reference](#standard-sensor-field-reference)
+- [Model Files Reference](#model-files-reference)
 - [Testing POST Endpoints](#testing-post-endpoints)
 - [Deployment](#deployment)
 - [Extending the System](#extending-the-system)
@@ -34,83 +38,84 @@ Part of the *Smart Vehicle ECU Monitoring and Predictive Maintenance* major proj
 
 ## Overview
 
-This service exposes two things behind a single base URL:
+This service exposes three things behind a single base URL:
 
-1. **Machine learning inference** — classifies driver behaviour and vehicle
-   health from OBD-II parameter windows.
+1. **Machine learning inference** — three specialised models for driver
+   behaviour classification, vehicle health anomaly detection, and fuel
+   consumption estimation, all running on live OBD-II data.
 2. **An OBD-II simulator** — plays back a recorded vehicle dataset row by
    row, in real time, over REST and WebSockets, so a frontend or ML
    pipeline can be built and demoed without a physical vehicle or adapter.
+3. **Real-time ML integration** — the simulator automatically runs all
+   three ML models on every tick and pushes inference results alongside
+   raw sensor data over WebSocket.
 
-Both are independently useful and independently testable, but ship as one
-process so the whole project has a single deployment and a single URL.
+Both the ML API and the simulator are independently useful and independently
+testable, but ship as one process so the whole project has a single
+deployment and a single URL.
 
 ## Architecture
 
 ```
-                    ┌─────────────────────────────┐
-                    │        FastAPI App          │
-                    │        (app/main.py)        │
-                    └──────────────┬──────────────┘
-                                   │
-              ┌────────────────────┴────────────────────┐
-              │                                          │
-    ┌─────────▼─────────┐                     ┌──────────▼──────────┐
-    │      ML API        │                     │   OBD-II Simulator   │
-    │    (app/ml/)        │                     │  (app/simulator/)     │
-    │                     │                     │                       │
-    │ • KMeans driver     │                     │ • Dataset loader      │
-    │   behaviour model   │                     │ • Playback engine     │
-    │ • Random Forest      │                     │ • REST control API   │
-    │   health classifier  │                     │ • WebSocket streaming │
-    └─────────────────────┘                     └───────────────────────┘
+                    ┌──────────────────────────────────┐
+                    │          FastAPI App v2.0.0       │
+                    │          (app/main.py)            │
+                    └───────────────┬──────────────────┘
+                                    │
+              ┌─────────────────────┴─────────────────────┐
+              │                                            │
+    ┌─────────▼──────────┐                      ┌──────────▼──────────┐
+    │       ML API        │                      │   OBD-II Simulator   │
+    │     (app/ml/)       │                      │  (app/simulator/)    │
+    │                     │                      │                      │
+    │ • XGBoost driver    │    ML functions are   │ • Dataset loader     │
+    │   behaviour         │◄───imported by the───►│ • Playback engine    │
+    │ • LSTM Autoencoder  │    simulator to run   │ • REST control API   │
+    │   health anomaly    │    inference on each   │ • WebSocket stream   │
+    │ • BiLSTM + Attn     │    tick automatically  │ • Rolling ML buffer  │
+    │   fuel estimator    │                      │                      │
+    └─────────────────────┘                      └──────────────────────┘
 ```
 
-The two halves don't import from each other. Nothing in `app/ml/` knows
-the simulator exists, and nothing in `app/simulator/` knows the ML models
-exist — `app/main.py` is the only place they're wired together, currently
-just by being mounted on the same app.
+The simulator imports the three ML inference functions and runs them
+automatically on a rolling buffer of ticks. Results are attached to
+every WebSocket message under the `ml` key, so frontends get raw sensor
+data **and** ML predictions in a single push with zero extra API calls.
 
-## Why the simulator and ML API are merged
+## ML Models
 
-Deployed as one Render/Railway free-tier service instead of two, because:
-
-- **One cold start, not two.** Free-tier services sleep after ~15 minutes
-  of inactivity. Two separate services means two independent wake-up
-  delays (30–60s each) — if a demo request happens to hit whichever one is
-  still asleep, that's a hang at the worst possible moment. One service,
-  one wake-up.
-- **One URL for the frontend.** No cross-origin configuration between
-  "your own two backends."
-- **No real reason to split them yet.** The simulator only needs to be its
-  own service once it's replaced by real hardware or needs to scale past a
-  single demo vehicle — see [Extending the System](#extending-the-system).
+| Model | Architecture | Input | Output | Training Notebook |
+|---|---|---|---|---|
+| **Driver Behaviour** | XGBoost (Random Forest) | Rolling window of RPM, speed, throttle arrays (≥5 points) | `Economical` / `Moderate` / `Aggressive` + confidence + TTS message | `DriverBehavior_XGBoost_012.ipynb` |
+| **Vehicle Health** | LSTM Autoencoder (PyTorch) | Sequence of 24 OBD-II ticks (10 sensor features each) | Anomaly flag + per-feature reconstruction errors + triggered features | `LSTM_Autoencoder_Train_Eval.ipynb` |
+| **Fuel Estimation** | BiLSTM + Self-Attention (TensorFlow/Keras) | Window of 20 OBD-II ticks (7 raw + 3 derived features) | Fuel consumption rate (g/s) + instantaneous mileage (km/L) | `AutoVue_Fuel_LSTM.ipynb` |
 
 ## Project Structure
 
 ```
-ecu-backend-merged/
+ecu-backend/
 ├── app/
-│   ├── main.py                      # Entry point — mounts both APIs, no route collisions
+│   ├── main.py                      # Entry point — mounts ML + simulator, warning filters
 │   ├── ml/
-│   │   ├── driver_behaviour.py       # KMeans driver behaviour classifier
-│   │   └── health_classifier.py      # Random Forest vehicle health classifier
+│   │   ├── driver_behaviour.py      # XGBoost driver behaviour classifier
+│   │   ├── health_classifier.py     # LSTM Autoencoder vehicle health anomaly detector
+│   │   └── fuel_estimator.py        # BiLSTM + Attention fuel consumption estimator
 │   ├── simulator/
-│   │   ├── config.py                  # Simulator settings (env-var overridable)
+│   │   ├── config.py                # Simulator settings (env-var overridable)
 │   │   ├── services/
-│   │   │   ├── dataset_manager.py     # Loads/cleans CSV & XLSX OBD-II datasets
-│   │   │   └── simulator.py            # Playback engine (pause/resume/speed/loop)
+│   │   │   ├── dataset_manager.py   # Loads/cleans CSV & XLSX OBD-II datasets
+│   │   │   └── simulator.py         # Playback engine + rolling ML buffer + inference hooks
 │   │   └── api/
-│   │       ├── routes.py               # REST endpoints for datasets + playback
-│   │       └── websocket.py            # WebSocket connection manager
+│   │       ├── routes.py            # REST endpoints for datasets + playback + ML polling
+│   │       └── websocket.py         # WebSocket connection manager
 │   └── static/
-│       └── dashboard.html            # Built-in control dashboard (single file, no build step)
+│       └── dashboard.html           # Built-in control dashboard (single file, no build step)
 ├── datasets/                        # Bundled sample OBD-II datasets
-├── uploads/                         # User-uploaded datasets (gitignored, not persistent on free tier)
-├── models/                          # Trained model artifacts (.joblib / .pkl)
+├── uploads/                         # User-uploaded datasets (gitignored)
+├── models/                          # Trained model artifacts (see Model Files Reference)
 ├── requirements.txt
 ├── Dockerfile
-├── run.py                            # Local dev entrypoint
+├── run.py                           # Local dev entrypoint
 └── README.md
 ```
 
@@ -123,8 +128,8 @@ ecu-backend-merged/
 ### Installation
 ```bash
 git clone <your-repo-url>
-cd ecu-backend-merged
-python3 -m venv venv
+cd ecu-backend
+python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -156,33 +161,43 @@ Base URL (deployed): `https://<your-app>.onrender.com`
 ### Machine Learning Endpoints
 
 #### `POST /api/driver/predict`
-Classifies driver behaviour from a rolling window of OBD-II readings using a pre-trained KMeans model.
+Classifies driver behaviour from a rolling window of OBD-II readings using a pre-trained XGBoost model. The model evaluates **driving smoothness** — variance in speed, RPM, pedal position, and acceleration — rather than absolute sensor values.
 
 **Request body**
 ```json
 {
   "rpm_values": [800, 850, 900, 1200, 1500, 1400, 1300],
   "speed_values": [0, 0, 5, 20, 35, 40, 38],
-  "throttle_values": [10, 12, 15, 30, 45, 40, 35]
+  "throttle_values": [10, 12, 15, 30, 45, 40, 35],
+  "window_index": 0
 }
 ```
-Minimum 5 data points per array; all three arrays must be the same length.
+- `rpm_values`, `speed_values`, `throttle_values` — time-series arrays, minimum 5 data points, all same length.
+- `window_index` — optional monotonic counter (default `0`), used as one of the 9 engineered features.
 
 **Response `200`**
 ```json
 {
-  "cluster_id": 0,
-  "behaviour_class": "Moderate",
-  "features_debug": {
-    "Engine RPM [RPM]_std": 262.83,
-    "Engine RPM [RPM]_mad": 150.0,
-    "Vehicle Speed Sensor [km/h]_mad": 7.0,
-    "acceleration_std": 6.52,
-    "acceleration_range": 17.0,
-    "Absolute Throttle Position [%]_std": 13.22
+  "label": "Moderate",
+  "confidence": 0.5035,
+  "tts_message": "Your driving is acceptable. Watch your speed variations and try to accelerate more gently.",
+  "feature_values": {
+    "window": 0,
+    "avg_speed": 19.71,
+    "vs_dev": 17.51,
+    "mean_rpm": 1135.71,
+    "rpm_std": 262.83,
+    "mean_pedal": 26.71,
+    "pedal_std": 13.22,
+    "max_speed": 40,
+    "accel_std": 0.183
   }
 }
 ```
+- `label` — one of `"Economical"`, `"Moderate"`, `"Aggressive"`.
+- `confidence` — model probability for the predicted class (0.0–1.0).
+- `tts_message` — human-readable sentence suitable for text-to-speech.
+- `feature_values` — the 9 engineered features sent to the model (useful for debugging).
 
 **Errors**
 | Code | Cause |
@@ -193,38 +208,110 @@ Minimum 5 data points per array; all three arrays must be the same length.
 ---
 
 #### `POST /api/health/predict`
-Classifies a single vehicle telemetry snapshot into a health status using a pre-trained Random Forest model.
+Detects anomalies in vehicle health using an LSTM Autoencoder. The model learns the **normal correlations** between all 10 sensor features — when the relationship between sensors breaks (e.g. high RPM but low airflow), it flags an anomaly even if no single sensor is out of range.
 
 **Request body**
 ```json
 {
-  "rpm": 1500,
-  "throttle_pos": 30,
-  "map_kpa": 97,
-  "maf": 10,
-  "coolant_temp": 90,
-  "intake_air_temp": 25,
-  "ambient_temp": 24,
-  "pedal_d": 20
+  "ticks": [
+    {
+      "rpm": 798, "vss": 0, "maf": 8.74, "throttle_pos": 83.1,
+      "map_kpa": 97, "coolant_temp": 33, "intake_air_temp": 32,
+      "ambient_temp": 24, "pedal_d": 14.1, "pedal_e": 14.5
+    }
+  ]
+}
+```
+- `ticks` — array of sensor snapshots. **Must have ≥ 24 items** (the LSTM sequence length). If more are provided, only the most recent 24 are used.
+- All fields default to `0.0` if omitted.
+
+**Response `200` — Normal**
+```json
+{
+  "is_anomaly": false,
+  "status": "Normal",
+  "anomaly_score": 0.000012,
+  "feature_errors": {
+    "Engine Coolant Temperature [°C]": 0.000003,
+    "Intake Manifold Absolute Pressure [kPa]": 0.000008,
+    "Engine RPM [RPM]": 0.000005,
+    "Vehicle Speed Sensor [km/h]": 0.000002,
+    "Intake Air Temperature [°C]": 0.000004,
+    "Air Flow Rate from Mass Flow Sensor [g/s]": 0.000007,
+    "Absolute Throttle Position [%]": 0.000001,
+    "Ambient Air Temperature [°C]": 0.000003,
+    "Accelerator Pedal Position D [%]": 0.000012,
+    "Accelerator Pedal Position E [%]": 0.000009
+  },
+  "triggered_features": []
 }
 ```
 
-**Response `200`**
+**Response `200` — Anomaly detected**
 ```json
 {
-  "status": "Normal",
-  "confidence": 0.9874,
-  "probabilities": {
-    "Normal": 0.9874,
-    "Warning": 0.0126
-  }
+  "is_anomaly": true,
+  "status": "Anomaly",
+  "anomaly_score": 3.945678,
+  "feature_errors": {
+    "Engine RPM [RPM]": 3.945678,
+    "Air Flow Rate from Mass Flow Sensor [g/s]": 0.86078,
+    "Vehicle Speed Sensor [km/h]": 0.231513
+  },
+  "triggered_features": [
+    "Engine RPM [RPM]",
+    "Air Flow Rate from Mass Flow Sensor [g/s]",
+    "Vehicle Speed Sensor [km/h]"
+  ]
 }
 ```
+- `is_anomaly` — `true` if any feature's reconstruction error exceeds its per-feature threshold.
+- `anomaly_score` — the highest single-feature error (useful for severity ranking).
+- `feature_errors` — per-feature reconstruction error (higher = more anomalous).
+- `triggered_features` — list of sensor names that exceeded their individual thresholds.
 
 **Errors**
 | Code | Cause |
 |---|---|
-| `500` | Internal model error (e.g. malformed input) |
+| `400` | Fewer than 24 ticks supplied |
+| `500` | Internal model error |
+
+---
+
+#### `POST /api/fuel/predict`
+Estimates real-time fuel consumption rate and instantaneous mileage using a BiLSTM + Self-Attention model. Three derived features (acceleration, throttle rate, engine load) are computed automatically from the raw sensor inputs.
+
+**Request body**
+```json
+{
+  "ticks": [
+    {
+      "rpm": 1500, "vss": 45, "maf": 12.5, "throttle_pos": 30,
+      "map_kpa": 97, "pedal_d": 20, "pedal_e": 18
+    }
+  ]
+}
+```
+- `ticks` — array of sensor snapshots. **Must have ≥ 20 items** (the model's window size). If more are provided, only the most recent 20 are used.
+- All fields default to `0.0` if omitted.
+
+**Response `200`**
+```json
+{
+  "fcr_gs": 1.2345,
+  "mileage_kmpl": 14.2,
+  "vss_kmph": 45.0
+}
+```
+- `fcr_gs` — fuel consumption rate in grams per second.
+- `mileage_kmpl` — instantaneous mileage in km/L. Returns `null` if the vehicle speed is below 2 km/h (stationary/crawling).
+- `vss_kmph` — the speed of the last tick used (for reference).
+
+**Errors**
+| Code | Cause |
+|---|---|
+| `400` | Fewer than 20 ticks supplied |
+| `500` | Internal model error |
 
 ---
 
@@ -316,7 +403,7 @@ All endpoints below return the same **status object** shape:
 | `POST /api/start` | `{"dataset_id"?, "speed"?, "loop"?}` (all optional) | Starts streaming from row 0. Loads the default dataset if none is active. `400` if no dataset is available. |
 | `POST /api/pause` | — | No-op unless currently `running`. |
 | `POST /api/resume` | — | No-op unless currently `paused`. |
-| `POST /api/stop` | — | Cancels the playback task entirely. |
+| `POST /api/stop` | — | Cancels the playback task entirely. Clears the ML buffer. |
 | `POST /api/reset` | — | Stops and rewinds to row 0. |
 | `POST /api/speed` | `{"speed": 5}` | Must be one of `0.5, 1, 2, 5, 10`. `400` otherwise. |
 | `POST /api/loop` | `{"loop": true}` | Toggle looping when the dataset ends. |
@@ -324,10 +411,10 @@ All endpoints below return the same **status object** shape:
 
 ---
 
-### Simulator — Live Data
+### Simulator — Live Data & ML
 
 #### `GET /api/live-data`
-Returns the most recent telemetry tick.
+Returns the most recent telemetry tick, including ML inference results.
 
 **Response `200`**
 ```json
@@ -347,26 +434,140 @@ Returns the most recent telemetry tick.
     "ambient_temp": 24.0,
     "pedal_d": 14.1,
     "pedal_e": 14.5
+  },
+  "ml": {
+    "driver_behaviour": { "..." },
+    "health": { "..." },
+    "fuel": { "..." }
   }
 }
 ```
 **Errors:** `404` if the simulator hasn't been started yet.
 
+#### `GET /api/ml/latest`
+Returns only the ML inference results from the most recent simulator tick — useful for polling without needing a WebSocket.
+
+**Response `200`**
+```json
+{
+  "driver_behaviour": {
+    "label": "Economical",
+    "confidence": 0.87,
+    "tts_message": "Great driving! You are being smooth and fuel-efficient. Keep it up.",
+    "feature_values": { "..." }
+  },
+  "health": {
+    "is_anomaly": false,
+    "status": "Normal",
+    "anomaly_score": 0.000012,
+    "feature_errors": { "..." },
+    "triggered_features": []
+  },
+  "fuel": {
+    "fcr_gs": 1.2345,
+    "mileage_kmpl": 14.2,
+    "vss_kmph": 45.0
+  }
+}
+```
+Returns `{}` if the simulator hasn't accumulated enough ticks for the ML models yet (first ~30 ticks).
+
+**Errors:** `404` if the simulator hasn't been started yet.
+
 #### `GET /api/history?limit=100`
-Returns the most recent `limit` ticks (default 100, ring buffer capped at 500 — see `HISTORY_BUFFER_SIZE`). Useful for backfilling a chart on page load before the WebSocket starts pushing new points.
+Returns the most recent `limit` ticks (default 100, ring buffer capped at 500 — see `HISTORY_BUFFER_SIZE`). Each entry includes the `ml` key. Useful for backfilling a chart on page load before the WebSocket starts pushing new points.
 
 ---
 
 ### Simulator — WebSockets
 
 #### `WS /api/ws/live`
-Pushes a telemetry tick (same shape as `/api/live-data`) every time the simulator advances a row. No client→server messages expected.
+Pushes a telemetry tick every time the simulator advances a row. After the ML buffer fills (~30 ticks), each message includes a top-level `ml` key with real-time inference results from all three models.
 
+**Message shape (after buffer fills)**
+```json
+{
+  "row_index": 105,
+  "total_rows": 30817,
+  "elapsed_seconds": 1049.0,
+  "playback_percent": 0.34,
+  "data": {
+    "coolant_temp": 33.0,
+    "map_kpa": 97.0,
+    "rpm": 798.0,
+    "vss": 0.0,
+    "intake_air_temp": 32.0,
+    "maf": 8.74,
+    "throttle_pos": 83.1,
+    "ambient_temp": 24.0,
+    "pedal_d": 14.1,
+    "pedal_e": 14.5
+  },
+  "ml": {
+    "driver_behaviour": {
+      "label": "Economical",
+      "confidence": 0.87,
+      "tts_message": "Great driving! You are being smooth and fuel-efficient. Keep it up.",
+      "feature_values": {
+        "window": 42,
+        "avg_speed": 5.53,
+        "vs_dev": 2.82,
+        "mean_rpm": 1022.06,
+        "rpm_std": 98.04,
+        "mean_pedal": 83.36,
+        "pedal_std": 0.18,
+        "max_speed": 10,
+        "accel_std": 0.011
+      }
+    },
+    "health": {
+      "is_anomaly": false,
+      "status": "Normal",
+      "anomaly_score": 0.000012,
+      "feature_errors": {
+        "Engine Coolant Temperature [°C]": 0.000003,
+        "Intake Manifold Absolute Pressure [kPa]": 0.000008,
+        "Engine RPM [RPM]": 0.000005,
+        "Vehicle Speed Sensor [km/h]": 0.000002,
+        "Intake Air Temperature [°C]": 0.000004,
+        "Air Flow Rate from Mass Flow Sensor [g/s]": 0.000007,
+        "Absolute Throttle Position [%]": 0.000001,
+        "Ambient Air Temperature [°C]": 0.000003,
+        "Accelerator Pedal Position D [%]": 0.000012,
+        "Accelerator Pedal Position E [%]": 0.000009
+      },
+      "triggered_features": []
+    },
+    "fuel": {
+      "fcr_gs": 1.2345,
+      "mileage_kmpl": 14.2,
+      "vss_kmph": 45.0
+    }
+  }
+}
+```
+
+**Buffer warm-up:** The `ml` key is `{}` for the first ~30 ticks while the rolling buffer fills. Each model activates at its minimum buffer size:
+- **Fuel estimation** — tick 20+
+- **Health anomaly detection** — tick 24+
+- **Driver behaviour** — tick 30+
+
+**Example usage**
 ```js
 const ws = new WebSocket("wss://<your-app>/api/ws/live");
 ws.onmessage = (event) => {
   const tick = JSON.parse(event.data);
-  console.log(tick.data.rpm, tick.data.vss);
+  console.log("RPM:", tick.data.rpm);
+
+  if (tick.ml?.health) {
+    console.log("Health:", tick.ml.health.status);
+  }
+  if (tick.ml?.fuel) {
+    console.log("Mileage:", tick.ml.fuel.mileage_kmpl, "km/L");
+  }
+  if (tick.ml?.driver_behaviour) {
+    console.log("Driver:", tick.ml.driver_behaviour.label);
+  }
 };
 ```
 
@@ -376,12 +577,6 @@ Pushes simulator log events (dataset loaded, streaming started/paused, warnings,
 { "level": "info", "message": "Streaming started (speed=10.0x, loop=true)", "timestamp": 1751900000.123 }
 ```
 
-**Why WebSockets over Server-Sent Events:** the dashboard needs continuous
-low-latency push (ticks every 0.1–1s) and WebSockets leave the door open
-for bidirectional messages later — e.g. a future mobile app sending
-control commands over the same socket. Browser and mobile WebView support
-is consistent, making it the safer default for this use case.
-
 ---
 
 ### System
@@ -390,7 +585,7 @@ is consistent, making it the safer default for this use case.
 |---|---|
 | `GET /health` | Health check (used by hosting platforms to detect a live instance) |
 | `GET /` | Serves the simulator control dashboard |
-| `GET /docs` | Swagger UI — interactive, supports "Try it out" for every POST endpoint |
+| `GET /docs` | Swagger UI — interactive, supports "Try it out" for every endpoint |
 | `GET /redoc` | ReDoc — clean read-only API reference |
 
 ---
@@ -420,6 +615,26 @@ hardware, without touching downstream code.
 
 ---
 
+## Model Files Reference
+
+All model artifacts live in the `models/` directory:
+
+| File | Purpose | Source |
+|---|---|---|
+| `driver_model.pkl` | XGBoost/RF driver behaviour classifier | `DriverBehavior_XGBoost_012.ipynb` (Cell 10) |
+| `driver_scaler.pkl` | StandardScaler for driver features | `DriverBehavior_XGBoost_012.ipynb` (Cell 10) |
+| `driver_metadata.json` | Feature list, label names, TTS messages, thresholds | `DriverBehavior_XGBoost_012.ipynb` (Cell 10) |
+| `lstm_autoencoder.pt` | PyTorch LSTM Autoencoder weights | `LSTM_Autoencoder_Train_Eval.ipynb` (Cell 14) |
+| `health_scaler.pkl` | MinMaxScaler for health features | `LSTM_Autoencoder_Train_Eval.ipynb` |
+| `health_model_config.pkl` | seq_len, n_features, hidden_dim, latent_dim, feature_cols | `LSTM_Autoencoder_Train_Eval.ipynb` |
+| `optimized_thresholds.pkl` | Per-feature anomaly thresholds | `LSTM_Autoencoder_Train_Eval.ipynb` (Cell 13) |
+| `fuel_lstm_model.keras` | Full Keras BiLSTM + Attention model | `AutoVue_Fuel_LSTM.ipynb` (Cell 11) |
+| `fuel_feature_scaler.pkl` | MinMaxScaler for fuel features | `AutoVue_Fuel_LSTM.ipynb` |
+
+> **Note:** The health and fuel notebooks both save files called `scaler.pkl` / `feature_scaler.pkl`. They are renamed to `health_scaler.pkl` and `fuel_feature_scaler.pkl` respectively to avoid silent overwrites in the shared `models/` directory.
+
+---
+
 ## Testing POST Endpoints
 
 A browser address bar can only ever send `GET` — typing a URL and hitting
@@ -429,9 +644,20 @@ correctly. To exercise POST endpoints:
 - **Swagger UI** — visit `/docs`, expand an endpoint, click "Try it out"
 - **curl**
   ```bash
+  # Driver behaviour
+  curl -X POST http://localhost:8000/api/driver/predict \
+    -H "Content-Type: application/json" \
+    -d '{"rpm_values":[800,850,900,1200,1500,1400,1300],"speed_values":[0,0,5,20,35,40,38],"throttle_values":[10,12,15,30,45,40,35]}'
+
+  # Health (needs 24+ ticks — abbreviated here)
   curl -X POST http://localhost:8000/api/health/predict \
     -H "Content-Type: application/json" \
-    -d '{"rpm":1500,"throttle_pos":30,"map_kpa":97,"maf":10,"coolant_temp":90,"intake_air_temp":25,"ambient_temp":24,"pedal_d":20}'
+    -d '{"ticks":[{"rpm":798,"vss":0,"maf":8.74,"throttle_pos":83.1,"map_kpa":97,"coolant_temp":33,"intake_air_temp":32,"ambient_temp":24,"pedal_d":14.1,"pedal_e":14.5}, ...]}'
+
+  # Fuel (needs 20+ ticks — abbreviated here)
+  curl -X POST http://localhost:8000/api/fuel/predict \
+    -H "Content-Type: application/json" \
+    -d '{"ticks":[{"rpm":1500,"vss":45,"maf":12.5,"throttle_pos":30,"map_kpa":97,"pedal_d":20,"pedal_e":18}, ...]}'
   ```
 - **Postman / Insomnia** — import the OpenAPI schema from `/openapi.json`
 - **The dashboard itself** — all its buttons already issue correct `fetch(..., {method: "POST"})` calls
@@ -446,7 +672,7 @@ correctly. To exercise POST endpoints:
 2. Render → **New +** → **Web Service** → connect the repo.
 3. Render auto-detects the `Dockerfile`. Leave build/start commands blank.
 4. Instance type: **Free**.
-5. **Create Web Service** — first deploy takes 3–5 minutes.
+5. **Create Web Service** — first deploy takes 5–10 minutes (TensorFlow + PyTorch are large).
 6. You'll get a URL like `https://your-app-name.onrender.com`.
 
 **Free tier caveats:**
@@ -483,15 +709,14 @@ self-contained package instead of being fused directly into `main.py`.
 
 ## Roadmap
 
-- [ ] Wire simulator ticks directly into `/api/health/predict` so health
-      classification runs automatically on live data instead of requiring
-      a manual request per snapshot
-- [ ] Anomaly detection (Isolation Forest)
+- [x] ~~Wire simulator ticks directly into ML models so inference runs automatically on live data~~
+- [x] ~~Anomaly detection (LSTM Autoencoder)~~
+- [x] ~~Fuel efficiency estimation (BiLSTM + Attention)~~
 - [ ] Composite Vehicle Health Score (0–100, weighted aggregation)
 - [ ] Predictive maintenance / Remaining Useful Life forecasting
-- [ ] Fuel efficiency prediction
 - [ ] DTC (Diagnostic Trouble Code) retrieval and decoding
 - [ ] Persistent storage (PostgreSQL) and auth (JWT + bcrypt)
+- [ ] Real-time mobile push notifications for critical anomalies
 
 ## License
 
