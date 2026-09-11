@@ -7,7 +7,6 @@ Part of the *AutoVue — Smart Vehicle ECU Monitoring and Predictive Maintenance
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg)](https://fastapi.tiangolo.com/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.2-EE4C2C.svg)](https://pytorch.org/)
-[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.16-FF6F00.svg)](https://www.tensorflow.org/)
 [![XGBoost](https://img.shields.io/badge/XGBoost-2.0-337AB7.svg)](https://xgboost.readthedocs.io/)
 [![License](https://img.shields.io/badge/license-Academic--Project-lightgrey.svg)](#license)
 
@@ -72,8 +71,8 @@ deployment and a single URL.
     │   behaviour         │◄───imported by the───►│ • Playback engine    │
     │ • LSTM Autoencoder  │    simulator to run   │ • REST control API   │
     │   health anomaly    │    inference on each   │ • WebSocket stream   │
-    │ • BiLSTM + Attn     │    tick automatically  │ • Rolling ML buffer  │
-    │   fuel estimator    │                      │                      │
+    │ • Physics fuel      │    tick automatically  │ • Rolling ML buffer  │
+    │   estimator (3-tier)│                      │                      │
     └─────────────────────┘                      └──────────────────────┘
 ```
 
@@ -88,7 +87,7 @@ data **and** ML predictions in a single push with zero extra API calls.
 |---|---|---|---|---|
 | **Driver Behaviour** | XGBoost (Random Forest) | Rolling window of RPM, speed, throttle arrays (≥5 points) | `Economical` / `Moderate` / `Aggressive` + confidence + TTS message | `DriverBehavior_XGBoost_012.ipynb` |
 | **Vehicle Health** | LSTM Autoencoder (PyTorch) | Sequence of 24 OBD-II ticks (10 sensor features each) | Anomaly flag + per-feature reconstruction errors + triggered features | `LSTM_Autoencoder_Train_Eval.ipynb` |
-| **Fuel Estimation** | BiLSTM + Self-Attention (TensorFlow/Keras) | Window of 20 OBD-II ticks (7 raw + 3 derived features) | Fuel consumption rate (g/s) + instantaneous mileage (km/L) | `AutoVue_Fuel_LSTM.ipynb` |
+| **Fuel Estimation** | Physics-based (MAF→MAP+RPM→throttle heuristic) | Last 3 ticks averaged (RPM, VSS, MAF, MAP, IAT, throttle) | FCR (g/s) + mileage (km/L) + tier used | No training required |
 
 ## Project Structure
 
@@ -279,7 +278,17 @@ Detects anomalies in vehicle health using an LSTM Autoencoder. The model learns 
 ---
 
 #### `POST /api/fuel/predict`
-Estimates real-time fuel consumption rate and instantaneous mileage using a BiLSTM + Self-Attention model. Three derived features (acceleration, throttle rate, engine load) are computed automatically from the raw sensor inputs.
+Three-tier physics engine. Tier 1: MAF-based (FCR = MAF/14.7).
+Tier 2: Speed-density equation (MAP + RPM + IAT). Tier 3: throttle+RPM
+heuristic. AFR=14.7, fuel density=0.730 g/mL (BS6 E10), displacement=1.598L
+(Seat Leon 1.6 FSI). Mileage capped at 50 km/L.
+
+| Tier | Method | Condition |
+|---|---|---|
+| 1 | MAF-based | MAF > 0.5 g/s AND RPM > 200 |
+| 2 | Speed-density | MAP present AND RPM > 200 |
+| 3 | Throttle heuristic | RPM > 200 (fallback) |
+| 0 | Engine off | RPM ≤ 200 |
 
 **Request body**
 ```json
@@ -300,12 +309,16 @@ Estimates real-time fuel consumption rate and instantaneous mileage using a BiLS
 {
   "fcr_gs": 1.2345,
   "mileage_kmpl": 14.2,
-  "vss_kmph": 45.0
+  "vss_kmph": 45.0,
+  "method": "maf",
+  "tier": 1
 }
 ```
 - `fcr_gs` — fuel consumption rate in grams per second.
 - `mileage_kmpl` — instantaneous mileage in km/L. Returns `null` if the vehicle speed is below 2 km/h (stationary/crawling).
 - `vss_kmph` — the speed of the last tick used (for reference).
+- `method` — the tier method used (`maf`, `map_rpm`, `throttle_heuristic`, `stopped`).
+- `tier` — the integer tier level (0-3).
 
 **Errors**
 | Code | Cause |
@@ -466,7 +479,9 @@ Returns only the ML inference results from the most recent simulator tick — us
   "fuel": {
     "fcr_gs": 1.2345,
     "mileage_kmpl": 14.2,
-    "vss_kmph": 45.0
+    "vss_kmph": 45.0,
+    "method": "maf",
+    "tier": 1
   }
 }
 ```
@@ -541,7 +556,9 @@ Pushes a telemetry tick every time the simulator advances a row. After the ML bu
     "fuel": {
       "fcr_gs": 1.2345,
       "mileage_kmpl": 14.2,
-      "vss_kmph": 45.0
+      "vss_kmph": 45.0,
+      "method": "maf",
+      "tier": 1
     }
   }
 }
@@ -628,8 +645,10 @@ All model artifacts live in the `models/` directory:
 | `health_scaler.pkl` | MinMaxScaler for health features | `LSTM_Autoencoder_Train_Eval.ipynb` |
 | `health_model_config.pkl` | seq_len, n_features, hidden_dim, latent_dim, feature_cols | `LSTM_Autoencoder_Train_Eval.ipynb` |
 | `optimized_thresholds.pkl` | Per-feature anomaly thresholds | `LSTM_Autoencoder_Train_Eval.ipynb` (Cell 13) |
-| `fuel_lstm_model.keras` | Full Keras BiLSTM + Attention model | `AutoVue_Fuel_LSTM.ipynb` (Cell 11) |
-| `fuel_feature_scaler.pkl` | MinMaxScaler for fuel features | `AutoVue_Fuel_LSTM.ipynb` |
+| `fuel_lstm_model.keras` | (archived, not loaded at runtime) | `AutoVue_Fuel_LSTM.ipynb` (Cell 11) |
+| `fuel_feature_scaler.pkl` | (archived, not loaded at runtime) | `AutoVue_Fuel_LSTM.ipynb` |
+
+> **Note (fuel):** `fuel_lstm_model.keras` and `fuel_feature_scaler.pkl` are retained for archival purposes. Runtime uses `app/ml/fuel_estimator.py` (physics-based). BiLSTM implementation preserved in `app/ml/fuel_estimator_bilstm.py`.
 
 > **Note:** The health and fuel notebooks both save files called `scaler.pkl` / `feature_scaler.pkl`. They are renamed to `health_scaler.pkl` and `fuel_feature_scaler.pkl` respectively to avoid silent overwrites in the shared `models/` directory.
 

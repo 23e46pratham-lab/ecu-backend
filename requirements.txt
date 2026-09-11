@@ -6,7 +6,7 @@ scikit-learn==1.6.1
 joblib>=1.4
 xgboost>=2.0
 torch>=2.2
-tensorflow>=2.16
+# fuel estimation is physics-based; tensorflow not required
 python-multipart>=0.0.9
 pydantic>=2.7
 openpyxl>=3.1

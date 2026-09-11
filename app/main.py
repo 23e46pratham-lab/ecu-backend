@@ -14,7 +14,7 @@ Route map (no collisions):
   /health                     - shared health check
   /api/driver/predict         - ML: driver behaviour (XGBoost)
   /api/health/predict         - ML: ECU anomaly detection (LSTM Autoencoder, sequence input)
-  /api/fuel/predict           - ML: fuel consumption rate (BiLSTM)
+  /api/fuel/predict           - Physics-based (MAF->MAP+RPM->throttle heuristic)
   /api/datasets, /api/upload,
   /api/start, /api/status,
   /api/live-data, /api/ws/live, ...  - simulator (see app/simulator/api/routes.py)
@@ -93,6 +93,7 @@ class FuelTick(BaseModel):
     pedal_d:      float = 0.0
     pedal_e:      float = 0.0
 
+# Physics-based; no ML model required
 class FuelWindowRequest(BaseModel):
     ticks: List[FuelTick]    # must be >= 20 items
 

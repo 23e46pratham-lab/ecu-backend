@@ -273,6 +273,7 @@ class Simulator:
                 # Fuel estimation — needs 20 ticks
                 if len(self._tick_buffer) >= self._FUEL_WINDOW_SIZE:
                     try:
+                        # Physics-based: Tier 1=MAF, Tier 2=MAP+RPM, Tier 3=throttle heuristic
                         from app.ml.fuel_estimator import estimate_fuel
                         ml_results["fuel"] = estimate_fuel(self._tick_buffer)
                     except Exception as exc:
