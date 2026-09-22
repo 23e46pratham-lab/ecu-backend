@@ -24,6 +24,7 @@ Part of the *AutoVue — Smart Vehicle ECU Monitoring and Predictive Maintenance
   - [Simulator — Dataset Management](#simulator--dataset-management)
   - [Simulator — Playback Control](#simulator--playback-control)
   - [Simulator — Live Data & ML](#simulator--live-data--ml)
+  - [Simulator — Sensor Override Dials](#simulator--sensor-override-dials)
   - [Simulator — WebSockets](#simulator--websockets)
   - [System](#system)
 - [Standard Sensor Field Reference](#standard-sensor-field-reference)
@@ -45,9 +46,16 @@ This service exposes three things behind a single base URL:
 2. **An OBD-II simulator** — plays back a recorded vehicle dataset row by
    row, in real time, over REST and WebSockets, so a frontend or ML
    pipeline can be built and demoed without a physical vehicle or adapter.
+   Two datasets are bundled: a normal driving session and an anomaly session
+   (for demonstrating the health anomaly model during presentations).
 3. **Real-time ML integration** — the simulator automatically runs all
    three ML models on every tick and pushes inference results alongside
    raw sensor data over WebSocket.
+4. **Sensor Override Dials** — interactive 360° rotary knobs in the
+   dashboard (and REST endpoints) let you force any sensor to a fixed value
+   mid-playback, with instant snap-back to the dataset when released.
+   Designed for live presentations: trigger an anomaly on demand without
+   modifying any dataset file.
 
 Both the ML API and the simulator are independently useful and independently
 testable, but ship as one process so the whole project has a single
@@ -494,6 +502,73 @@ Returns the most recent `limit` ticks (default 100, ring buffer capped at 500 �
 
 ---
 
+### Simulator — Sensor Override Dials
+
+A set of REST endpoints that let you override any sensor field with a
+fixed value while the simulator continues playing back the dataset normally.
+The override is applied at tick-build time: dataset rows are read, then any
+active overrides are merged on top before the payload is broadcast.
+
+This is the backend for the **360° rotary dial panel** in the dashboard:
+each knob tracks the live dataset value in real-time, and locks to a manual
+value only when its checkbox is activated.
+
+#### Tick payload changes
+
+When any dials are active, each WebSocket / `/api/live-data` tick gains two
+additional keys:
+
+```json
+{
+  "data":         { "rpm": 5000, ... },        // effective values (overrides merged in)
+  "dataset_data": { "rpm": 900,  ... },        // raw dataset readings (unmodified)
+  "overrides":    ["rpm", "coolant_temp"]       // which fields are currently overridden
+}
+```
+
+`dataset_data` and `overrides` are always present (overrides is `[]` when
+no dials are active). The frontend uses `dataset_data` to keep chart
+history honest and to animate non-overridden knobs.
+
+#### `GET /api/dials`
+Returns all currently active overrides.
+
+**Response `200`**
+```json
+{ "overrides": { "rpm": 5000.0, "coolant_temp": 110.0 } }
+```
+Returns `{"overrides": {}}` when no dials are active.
+
+#### `POST /api/dials`
+Sets (or updates) an override for a single sensor field.
+
+**Request body**
+```json
+{ "field": "rpm", "value": 5000.0 }
+```
+- `field` — one of the 10 standard sensor names (see [Standard Sensor Field Reference](#standard-sensor-field-reference)).
+- `value` — the fixed value to broadcast instead of the dataset reading.
+
+**Response `200`**
+```json
+{ "overrides": { "rpm": 5000.0 } }
+```
+**Errors:** `400` if `field` is not a recognised sensor name.
+
+#### `DELETE /api/dials`
+Releases **all** active overrides at once. All fields immediately resume
+reading from the dataset on the next tick.
+
+**Response `200`:** `{"overrides": {}}`
+
+#### `DELETE /api/dials/{field}`
+Releases the override for a single field; it resumes reading from the dataset.
+
+**Response `200`:** `{"overrides": { ... remaining overrides ... }}`  
+**Errors:** `400` if `field` is not a recognised sensor name.
+
+---
+
 ### Simulator — WebSockets
 
 #### `WS /api/ws/live`
@@ -731,6 +806,9 @@ self-contained package instead of being fused directly into `main.py`.
 - [x] ~~Wire simulator ticks directly into ML models so inference runs automatically on live data~~
 - [x] ~~Anomaly detection (LSTM Autoencoder)~~
 - [x] ~~Fuel efficiency estimation (BiLSTM + Attention)~~
+- [x] ~~Sensor override dials — force any OBD sensor to a fixed value mid-playback for live demos~~
+- [x] ~~Bundled anomaly dataset (`test_anomaly.csv`) for triggering anomaly model during presentations~~
+- [ ] Location dataset integration (GPS log with lat/lon/elevation/speed — merge with OBD data for map display)
 - [ ] Composite Vehicle Health Score (0–100, weighted aggregation)
 - [ ] Predictive maintenance / Remaining Useful Life forecasting
 - [ ] DTC (Diagnostic Trouble Code) retrieval and decoding

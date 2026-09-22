@@ -40,6 +40,11 @@ class RenameRequest(BaseModel):
     new_name: str
 
 
+class DialSetRequest(BaseModel):
+    field: str
+    value: float
+
+
 # ---------- dataset endpoints ----------
 
 @router.get("/datasets")
@@ -180,6 +185,45 @@ def _status_dict(status) -> dict:
         "dataset_duration_seconds": round(status.dataset_duration_seconds, 1),
         "playback_percent": round(100 * status.current_row / status.total_rows, 2) if status.total_rows else 0,
     }
+
+
+# ---------- sensor dial override endpoints ----------
+
+@router.get("/dials")
+def get_dials():
+    """Returns all currently active dial overrides as {field: value}."""
+    return {"overrides": simulator.get_dials()}
+
+
+@router.post("/dials")
+def set_dial(body: DialSetRequest):
+    """
+    Override a single sensor field with a fixed value.
+    The override takes effect on the very next simulator tick and persists
+    until explicitly released. The dataset playback continues normally—
+    only the value broadcast to clients is replaced.
+    """
+    try:
+        overrides = simulator.set_dial(body.field, body.value)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"overrides": overrides}
+
+
+@router.delete("/dials")
+def release_all_dials():
+    """Releases all active dial overrides. All fields snap back to dataset values."""
+    return {"overrides": simulator.release_all_dials()}
+
+
+@router.delete("/dials/{field}")
+def release_dial(field: str):
+    """Releases the override for a single field; it resumes reading from the dataset."""
+    try:
+        overrides = simulator.release_dial(field)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"overrides": overrides}
 
 
 # ---------- WebSocket endpoints ----------

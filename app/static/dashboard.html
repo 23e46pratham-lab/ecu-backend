@@ -2,200 +2,323 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>OBD-II Simulator Control Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OBD-II Simulator Control Panel — AutoVue</title>
+<meta name="description" content="AutoVue ECU simulator dashboard: real-time OBD-II data, sensor override dials, ML inference results.">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   :root {
-    --bg: #0f1420; --panel: #171e2e; --border: #262f45;
-    --text: #e6e9f0; --muted: #8891a7; --accent: #4f8cff;
-    --good: #35c86a; --warn: #f2b134; --bad: #ef4b5f;
+    --bg: #0a0d14; --panel: #111520; --panel2: #151c2a; --border: #1e2740;
+    --text: #e6e9f4; --muted: #6b7694; --accent: #4f8cff; --accent2: #7c5cfc;
+    --good: #30c97a; --warn: #f5b742; --bad: #f04f63;
+    --dial-track: #1a2035; --dial-fill: #4f8cff; --dial-override: #f5b742;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
-  header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-  header h1 { font-size: 18px; margin: 0; }
-  .status-pill { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
-  .pill-stopped { background: #2a3348; color: var(--muted); }
-  .pill-running { background: rgba(53,200,106,0.15); color: var(--good); }
-  .pill-paused { background: rgba(242,177,52,0.15); color: var(--warn); }
-  .pill-finished { background: rgba(79,140,255,0.15); color: var(--accent); }
-  main { padding: 20px 24px; display: grid; grid-template-columns: 320px 1fr; gap: 20px; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
-  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin: 0 0 12px; }
-  .full-width { grid-column: 1 / -1; }
-  select, input[type=text], button { background: #1c2436; border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 8px; font-size: 14px; }
-  button { cursor: pointer; transition: background 0.15s; }
-  button:hover { background: #24304a; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, Segoe UI, sans-serif; min-height: 100vh; }
+
+  /* ── Header ── */
+  header {
+    padding: 14px 24px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    background: rgba(17,21,32,0.95); backdrop-filter: blur(10px);
+    position: sticky; top: 0; z-index: 100;
+  }
+  header h1 { font-size: 16px; font-weight: 600; letter-spacing: 0.3px; }
+  header h1 span { color: var(--accent); }
+  .status-pill { padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+  .pill-stopped { background: #1a2035; color: var(--muted); }
+  .pill-running { background: rgba(48,201,122,0.12); color: var(--good); border: 1px solid rgba(48,201,122,0.3); }
+  .pill-paused  { background: rgba(245,183,66,0.12); color: var(--warn); border: 1px solid rgba(245,183,66,0.3); }
+  .pill-finished{ background: rgba(79,140,255,0.12); color: var(--accent); border: 1px solid rgba(79,140,255,0.3); }
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; transition: background 0.3s; }
+  .dot-online { background: var(--good); box-shadow: 0 0 6px var(--good); }
+  .dot-offline { background: var(--bad); }
+
+  /* ── Layout ── */
+  main { padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+  .grid-2 { display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .panel-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 14px; }
+
+  /* ── Controls ── */
+  select, input[type=text], button { background: #1a2035; border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 13px; font-family: inherit; }
+  button { cursor: pointer; transition: background 0.15s, border-color 0.15s, opacity 0.15s; font-weight: 500; }
+  button:hover { background: #1e2845; }
   button.primary { background: var(--accent); border-color: var(--accent); color: white; }
   button.primary:hover { background: #3d78e6; }
+  button.danger { background: rgba(240,79,99,0.1); border-color: var(--bad); color: var(--bad); }
+  button.danger:hover { background: rgba(240,79,99,0.2); }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
-  .control-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .speed-btns button.active { background: var(--accent); border-color: var(--accent); }
-  .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
-  .metric-card { background: #1c2436; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-  .metric-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
-  .metric-card .value { font-size: 22px; font-weight: 700; margin-top: 4px; }
-  .metric-card .unit { font-size: 12px; color: var(--muted); font-weight: 400; }
-  .progress-bar { height: 8px; background: #1c2436; border-radius: 4px; overflow: hidden; margin: 8px 0; }
-  .progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
-  .stat-line { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .control-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+  .speed-btns button.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+  /* ── Metric Cards ── */
+  .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  .metric-card {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+    transition: border-color 0.3s;
+  }
+  .metric-card.overridden { border-color: var(--dial-override); }
+  .metric-card .m-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .metric-card .m-value { font-size: 22px; font-weight: 700; margin-top: 4px; line-height: 1; }
+  .metric-card .m-unit { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .metric-card .m-badge { font-size: 9px; background: rgba(245,183,66,0.15); color: var(--warn); border-radius: 4px; padding: 1px 5px; margin-top: 4px; display: inline-block; }
+
+  /* ── Progress / Stats ── */
+  .progress-bar { height: 6px; background: #1a2035; border-radius: 3px; overflow: hidden; margin: 10px 0; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.4s; }
+  .stat-line { display: flex; justify-content: space-between; font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); }
   .stat-line:last-child { border-bottom: none; }
   .stat-line span:last-child { color: var(--muted); }
-  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .chart-box { background: #1c2436; border-radius: 10px; padding: 10px; height: 200px; }
-  #logBox { height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; background: #0c1119; border-radius: 8px; padding: 10px; }
+
+  /* ── Charts ── */
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .chart-box { background: var(--panel2); border-radius: 10px; padding: 10px; height: 180px; }
+
+  /* ── Logs ── */
+  #logBox { height: 180px; overflow-y: auto; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 11px; background: #080b12; border-radius: 8px; padding: 10px; line-height: 1.7; }
   .log-info { color: var(--muted); }
   .log-warning { color: var(--warn); }
   .log-error { color: var(--bad); }
-  .dataset-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; font-size: 13px; }
-  .dataset-item:hover { background: #1c2436; }
-  .dataset-item.active { background: rgba(79,140,255,0.12); }
-  .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-  .dot-online { background: var(--good); } .dot-offline { background: var(--bad); }
+
+  /* ── Dataset list ── */
+  .dataset-item { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 8px; font-size: 12px; transition: background 0.15s; }
+  .dataset-item:hover { background: #1a2035; }
+  .dataset-item.active { background: rgba(79,140,255,0.1); border: 1px solid rgba(79,140,255,0.2); }
+
+  /* ═══════════════════════════════════════════
+     ROTARY DIAL PANEL
+  ═══════════════════════════════════════════ */
+  .dials-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .dials-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 16px;
+  }
+  /* Individual dial card */
+  .dial-card {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 12px 10px;
+    display: flex; flex-direction: column; align-items: center;
+    transition: border-color 0.25s, box-shadow 0.25s;
+    user-select: none;
+  }
+  .dial-card.is-overriding {
+    border-color: var(--dial-override);
+    box-shadow: 0 0 16px rgba(245,183,66,0.15);
+  }
+  .dial-card .d-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.6px;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+    text-align: center;
+  }
+  /* The SVG knob wrapper */
+  .dial-knob-wrap {
+    position: relative; width: 90px; height: 90px; cursor: grab;
+    touch-action: none;
+  }
+  .dial-knob-wrap.locked { cursor: ns-resize; }
+  /* Value readout under knob */
+  .d-value-row { display: flex; flex-direction: column; align-items: center; margin-top: 8px; }
+  .d-value { font-size: 17px; font-weight: 700; line-height: 1; }
+  .d-unit  { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  /* Override checkbox row */
+  .d-toggle {
+    margin-top: 10px;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--muted);
+    cursor: pointer;
+  }
+  .d-toggle input[type=checkbox] { accent-color: var(--dial-override); width: 14px; height: 14px; cursor: pointer; }
+  .dial-card.is-overriding .d-toggle { color: var(--dial-override); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>🚗 OBD-II Vehicle Data Simulator</h1>
-  <div>
-    <span id="connDot" class="conn-dot dot-offline"></span>
-    <span id="connLabel" style="font-size:13px;color:var(--muted)">Connecting...</span>
-    &nbsp;&nbsp;
+  <h1>🚗 <span>AutoVue</span> — OBD-II Simulator</h1>
+  <div style="display:flex; align-items:center; gap:12px;">
+    <span style="font-size:12px; color:var(--muted);">
+      <span id="connDot" class="conn-dot dot-offline"></span>
+      <span id="connLabel">Connecting...</span>
+    </span>
     <span id="statePill" class="status-pill pill-stopped">stopped</span>
   </div>
 </header>
 
 <main>
-  <!-- LEFT COLUMN -->
-  <div style="display:flex; flex-direction:column; gap:20px;">
+  <!-- ── Top row: left controls + right metrics ── -->
+  <div class="grid-2">
 
-    <div class="panel">
-      <h2>Dataset Management</h2>
-      <div id="datasetList" style="margin-bottom:10px; max-height:140px; overflow-y:auto;"></div>
-      <div class="row">
-        <input type="file" id="uploadInput" accept=".csv,.xlsx,.xls" style="flex:1; font-size:12px;">
+    <!-- Left column -->
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <div class="panel">
+        <div class="panel-title">Dataset Management</div>
+        <div id="datasetList" style="margin-bottom:10px; max-height:140px; overflow-y:auto;"></div>
+        <div class="row">
+          <input type="file" id="uploadInput" accept=".csv,.xlsx,.xls" style="flex:1; font-size:12px;">
+        </div>
+        <button class="primary" style="width:100%" onclick="uploadDataset()">⬆ Upload Dataset</button>
       </div>
-      <button class="primary" style="width:100%" onclick="uploadDataset()">Upload Dataset</button>
+
+      <div class="panel">
+        <div class="panel-title">Simulation Controls</div>
+        <div class="control-grid">
+          <button class="primary" onclick="callApi('start')">▶ Start</button>
+          <button onclick="callApi('pause')">⏸ Pause</button>
+          <button onclick="callApi('resume')">⏵ Resume</button>
+          <button onclick="callApi('stop')">⏹ Stop</button>
+          <button onclick="callApi('reset')">⟲ Restart</button>
+          <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer;">
+            <input type="checkbox" id="loopCheck" checked onchange="setLoop()"> Loop
+          </label>
+        </div>
+        <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Playback Speed</div>
+        <div class="row speed-btns" id="speedBtns"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Statistics</div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+        <div class="stat-line"><span>Current Row</span><span id="statRow">0 / 0</span></div>
+        <div class="stat-line"><span>Playback</span><span id="statPct">0%</span></div>
+        <div class="stat-line"><span>Elapsed / Duration</span><span id="statTime">0s / 0s</span></div>
+        <div class="stat-line"><span>Speed</span><span id="statSpeed">1x</span></div>
+        <div class="stat-line"><span>Active Dataset</span><span id="statDataset">-</span></div>
+      </div>
     </div>
 
-    <div class="panel">
-      <h2>Simulation Controls</h2>
-      <div class="control-grid" style="margin-bottom:10px;">
-        <button class="primary" onclick="callApi('start')">▶ Start</button>
-        <button onclick="callApi('pause')">⏸ Pause</button>
-        <button onclick="callApi('resume')">⏵ Resume</button>
-        <button onclick="callApi('stop')">⏹ Stop</button>
-        <button onclick="callApi('reset')">⟲ Restart</button>
-        <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
-          <input type="checkbox" id="loopCheck" checked onchange="setLoop()"> Loop
-        </label>
+    <!-- Right column -->
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <div class="panel">
+        <div class="panel-title">Live Vehicle Data</div>
+        <div class="metric-grid" id="metricGrid"></div>
       </div>
-      <div style="font-size:12px; color:var(--muted); margin-bottom:4px;">Playback Speed</div>
-      <div class="row speed-btns" id="speedBtns"></div>
-    </div>
 
-    <div class="panel">
-      <h2>Statistics</h2>
-      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
-      <div class="stat-line"><span>Current Row</span><span id="statRow">0 / 0</span></div>
-      <div class="stat-line"><span>Playback %</span><span id="statPct">0%</span></div>
-      <div class="stat-line"><span>Elapsed / Duration</span><span id="statTime">0s / 0s</span></div>
-      <div class="stat-line"><span>Speed</span><span id="statSpeed">1x</span></div>
-      <div class="stat-line"><span>Active Dataset</span><span id="statDataset">-</span></div>
+      <div class="panel">
+        <div class="panel-title">Live Charts</div>
+        <div class="charts-grid">
+          <div class="chart-box"><canvas id="chartRpm"></canvas></div>
+          <div class="chart-box"><canvas id="chartSpeed"></canvas></div>
+          <div class="chart-box"><canvas id="chartThrottle"></canvas></div>
+          <div class="chart-box"><canvas id="chartCoolant"></canvas></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Simulator Logs</div>
+        <div id="logBox"></div>
+      </div>
     </div>
   </div>
 
-  <!-- RIGHT COLUMN -->
-  <div style="display:flex; flex-direction:column; gap:20px;">
-
-    <div class="panel">
-      <h2>Live Vehicle Data</h2>
-      <div class="metric-grid" id="metricGrid"></div>
-    </div>
-
-    <div class="panel">
-      <h2>Live Charts</h2>
-      <div class="charts-grid">
-        <div class="chart-box"><canvas id="chartRpm"></canvas></div>
-        <div class="chart-box"><canvas id="chartSpeed"></canvas></div>
-        <div class="chart-box"><canvas id="chartThrottle"></canvas></div>
-        <div class="chart-box"><canvas id="chartCoolant"></canvas></div>
+  <!-- ── Full-width: Sensor Override Dials ── -->
+  <div class="panel">
+    <div class="dials-header">
+      <div>
+        <div class="panel-title" style="margin-bottom:2px;">Sensor Override Dials</div>
+        <div style="font-size:11px; color:var(--muted);">
+          Knob tracks live dataset · Check box to lock &amp; override · Uncheck to snap back
+        </div>
       </div>
+      <button class="danger" onclick="resetAllDials()" style="font-size:12px; padding:6px 14px;">
+        ⟲ Reset All Dials
+      </button>
     </div>
-
-    <div class="panel">
-      <h2>Logs</h2>
-      <div id="logBox"></div>
-    </div>
+    <div class="dials-grid" id="dialsGrid"></div>
   </div>
+
 </main>
 
 <script>
+/* ═══════════════════════════════════════════════════════
+   Configuration
+═══════════════════════════════════════════════════════ */
 const API = "";
 const METRICS = [
-  {key: "rpm", label: "Engine RPM", unit: "RPM"},
-  {key: "vss", label: "Speed", unit: "km/h"},
-  {key: "coolant_temp", label: "Coolant Temp", unit: "°C"},
-  {key: "throttle_pos", label: "Throttle", unit: "%"},
-  {key: "maf", label: "Air Flow", unit: "g/s"},
-  {key: "map_kpa", label: "MAP", unit: "kPa"},
-  {key: "ambient_temp", label: "Ambient Temp", unit: "°C"},
-  {key: "intake_air_temp", label: "Intake Temp", unit: "°C"},
-  {key: "pedal_d", label: "Pedal Position", unit: "%"},
+  {key:"rpm",          label:"Engine RPM",    unit:"RPM",  min:0,   max:8000, step:10,  decimals:0},
+  {key:"vss",          label:"Speed",         unit:"km/h", min:0,   max:200,  step:1,   decimals:1},
+  {key:"coolant_temp", label:"Coolant Temp",  unit:"°C",   min:-20, max:130,  step:0.5, decimals:1},
+  {key:"throttle_pos", label:"Throttle",      unit:"%",    min:0,   max:100,  step:0.5, decimals:1},
+  {key:"maf",          label:"Air Flow",      unit:"g/s",  min:0,   max:400,  step:0.5, decimals:2},
+  {key:"map_kpa",      label:"MAP",           unit:"kPa",  min:10,  max:250,  step:1,   decimals:1},
+  {key:"ambient_temp", label:"Ambient Temp",  unit:"°C",   min:-20, max:60,   step:0.5, decimals:1},
+  {key:"intake_air_temp",label:"Intake Temp", unit:"°C",   min:-20, max:80,   step:0.5, decimals:1},
+  {key:"pedal_d",      label:"Pedal D",       unit:"%",    min:0,   max:100,  step:0.5, decimals:1},
+  {key:"pedal_e",      label:"Pedal E",       unit:"%",    min:0,   max:100,  step:0.5, decimals:1},
 ];
 const SPEEDS = [0.5, 1, 2, 5, 10];
-let activeDatasetId = null;
 
-// ---------- metric cards ----------
+let activeDatasetId = null;
+// Per-dial runtime state: { value (displayed), isOverriding, overrideValue }
+const dialState = {};
+// Track which fields the server says are overridden (from ws payload)
+let serverOverrides = [];
+
+/* ═══════════════════════════════════════════════════════
+   Metric Cards
+═══════════════════════════════════════════════════════ */
 function buildMetricCards() {
   const grid = document.getElementById("metricGrid");
   grid.innerHTML = METRICS.map(m => `
-    <div class="metric-card">
-      <div class="label">${m.label}</div>
-      <div class="value" id="metric-${m.key}">--<span class="unit"> ${m.unit}</span></div>
+    <div class="metric-card" id="card-${m.key}">
+      <div class="m-label">${m.label}</div>
+      <div class="m-value" id="metric-${m.key}">--<span class="m-unit"> ${m.unit}</span></div>
+      <div class="m-badge" id="badge-${m.key}" style="display:none">OVERRIDE</div>
     </div>`).join("");
 }
-function buildSpeedButtons() {
-  const box = document.getElementById("speedBtns");
-  box.innerHTML = SPEEDS.map(s => `<button data-speed="${s}" onclick="setSpeed(${s})">${s}x</button>`).join("");
-}
 buildMetricCards();
-buildSpeedButtons();
 
-// ---------- charts ----------
+/* ═══════════════════════════════════════════════════════
+   Charts
+═══════════════════════════════════════════════════════ */
 function makeChart(ctx, label, color) {
   return new Chart(ctx, {
     type: "line",
-    data: { labels: [], datasets: [{ label, data: [], borderColor: color, borderWidth: 2, pointRadius: 0, tension: 0.25 }] },
+    data: { labels: [], datasets: [{ label, data: [], borderColor: color, borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true, backgroundColor: color + "18" }] },
     options: {
       animation: false, responsive: true, maintainAspectRatio: false,
-      scales: { x: { display: false }, y: { ticks: { color: "#8891a7" }, grid: { color: "#262f45" } } },
-      plugins: { legend: { labels: { color: "#8891a7", font: {size: 11} } } }
+      scales: { x: { display: false }, y: { ticks: { color: "#6b7694", font:{size:10} }, grid: { color: "#1e2740" } } },
+      plugins: { legend: { labels: { color: "#8891a7", font:{size:11} } } }
     }
   });
 }
 const charts = {
-  rpm: makeChart(document.getElementById("chartRpm"), "RPM", "#4f8cff"),
-  vss: makeChart(document.getElementById("chartSpeed"), "Speed (km/h)", "#35c86a"),
-  throttle_pos: makeChart(document.getElementById("chartThrottle"), "Throttle (%)", "#f2b134"),
-  coolant_temp: makeChart(document.getElementById("chartCoolant"), "Coolant (°C)", "#ef4b5f"),
+  rpm:         makeChart(document.getElementById("chartRpm"),      "RPM",        "#4f8cff"),
+  vss:         makeChart(document.getElementById("chartSpeed"),    "Speed km/h", "#30c97a"),
+  throttle_pos:makeChart(document.getElementById("chartThrottle"),"Throttle %", "#f5b742"),
+  coolant_temp:makeChart(document.getElementById("chartCoolant"), "Coolant °C", "#f04f63"),
 };
-function pushChartPoint(chart, label, value) {
+function pushChart(chart, label, value) {
   const d = chart.data;
   d.labels.push(label);
   d.datasets[0].data.push(value);
-  if (d.labels.length > 60) { d.labels.shift(); d.datasets[0].data.shift(); }
+  if (d.labels.length > 80) { d.labels.shift(); d.datasets[0].data.shift(); }
   chart.update("none");
 }
 
-// ---------- REST helpers ----------
-async function callApi(action, body = {}) {
+/* ═══════════════════════════════════════════════════════
+   Speed buttons
+═══════════════════════════════════════════════════════ */
+function buildSpeedButtons() {
+  document.getElementById("speedBtns").innerHTML =
+    SPEEDS.map(s => `<button data-speed="${s}" onclick="setSpeed(${s})">${s}x</button>`).join("");
+}
+buildSpeedButtons();
+
+/* ═══════════════════════════════════════════════════════
+   REST helpers
+═══════════════════════════════════════════════════════ */
+async function callApi(action, body = {}, method = "POST") {
   const res = await fetch(`${API}/api/${action}`, {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+    method, headers: {"Content-Type": "application/json"},
+    body: method === "GET" ? undefined : JSON.stringify(body)
   });
-  return res.json();
+  return res.json().catch(() => ({}));
 }
 async function setSpeed(s) {
   await callApi("speed", { speed: s });
@@ -205,14 +328,16 @@ async function setLoop() {
   await callApi("loop", { loop: document.getElementById("loopCheck").checked });
 }
 async function loadDatasets() {
-  const res = await fetch(`${API}/api/datasets`);
-  const { datasets } = await res.json();
+  const { datasets } = await fetch(`${API}/api/datasets`).then(r => r.json());
   const box = document.getElementById("datasetList");
-  box.innerHTML = datasets.map(d => `
-    <div class="dataset-item ${d.dataset_id === activeDatasetId ? 'active' : ''}">
-      <span title="${d.filename}">${d.filename.slice(0, 28)}${d.filename.length > 28 ? '…' : ''} (${d.row_count} rows)</span>
-      <button style="font-size:11px; padding:2px 8px;" onclick="selectDataset('${d.dataset_id}')">Use</button>
-    </div>`).join("") || "<div style='color:var(--muted); font-size:13px;'>No datasets found</div>";
+  box.innerHTML = (datasets || []).map(d => `
+    <div class="dataset-item ${d.dataset_id === activeDatasetId ? "active" : ""}">
+      <span title="${d.filename}" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+        ${d.filename.length > 26 ? d.filename.slice(0,26)+"…" : d.filename}
+        <span style="color:var(--muted);">(${d.row_count})</span>
+      </span>
+      <button style="font-size:10px; padding:2px 8px; margin-left:6px;" onclick="selectDataset('${d.dataset_id}')">Use</button>
+    </div>`).join("") || `<div style="color:var(--muted); font-size:12px;">No datasets found</div>`;
 }
 async function selectDataset(id) {
   activeDatasetId = id;
@@ -229,13 +354,15 @@ async function uploadDataset() {
   loadDatasets();
 }
 
-// ---------- status polling (backstops the WebSocket) ----------
+/* ═══════════════════════════════════════════════════════
+   Status polling
+═══════════════════════════════════════════════════════ */
 async function pollStatus() {
-  const res = await fetch(`${API}/api/status`);
-  const s = await res.json();
+  const s = await fetch(`${API}/api/status`).then(r => r.json());
   activeDatasetId = s.dataset_id;
-  document.getElementById("statePill").textContent = s.state;
-  document.getElementById("statePill").className = `status-pill pill-${s.state}`;
+  const pill = document.getElementById("statePill");
+  pill.textContent = s.state;
+  pill.className = `status-pill pill-${s.state}`;
   document.getElementById("progressFill").style.width = `${s.playback_percent}%`;
   document.getElementById("statRow").textContent = `${s.current_row} / ${s.total_rows}`;
   document.getElementById("statPct").textContent = `${s.playback_percent}%`;
@@ -248,32 +375,66 @@ setInterval(pollStatus, 2000);
 pollStatus();
 loadDatasets();
 
-// ---------- WebSocket: live telemetry ----------
+/* ═══════════════════════════════════════════════════════
+   WebSocket
+═══════════════════════════════════════════════════════ */
 function connectWs(path, onMessage) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}${path}`);
-  ws.onopen = () => { document.getElementById("connDot").className = "conn-dot dot-online"; document.getElementById("connLabel").textContent = "Live"; };
+  ws.onopen = () => {
+    document.getElementById("connDot").className = "conn-dot dot-online";
+    document.getElementById("connLabel").textContent = "Live";
+  };
   ws.onclose = () => {
     document.getElementById("connDot").className = "conn-dot dot-offline";
-    document.getElementById("connLabel").textContent = "Reconnecting...";
+    document.getElementById("connLabel").textContent = "Reconnecting…";
     setTimeout(() => connectWs(path, onMessage), 1500);
   };
-  ws.onmessage = (evt) => onMessage(JSON.parse(evt.data));
-  return ws;
+  ws.onmessage = evt => onMessage(JSON.parse(evt.data));
 }
 
 connectWs("/api/ws/live", (payload) => {
-  const d = payload.data;
+  const d     = payload.data;          // effective values (with overrides merged)
+  const ds    = payload.dataset_data || d;  // raw dataset values
+  const ovrs  = payload.overrides || [];
+
+  serverOverrides = ovrs;
+
+  // Update metric cards
   METRICS.forEach(m => {
     const el = document.getElementById(`metric-${m.key}`);
+    const badge = document.getElementById(`badge-${m.key}`);
+    const card = document.getElementById(`card-${m.key}`);
     const v = d[m.key];
-    el.innerHTML = `${v === null || v === undefined ? "--" : v.toFixed(1)}<span class="unit"> ${m.unit}</span>`;
+    el.innerHTML = `${v === null || v === undefined ? "--" : Number(v).toFixed(m.decimals)}<span class="m-unit"> ${m.unit}</span>`;
+    const isOvr = ovrs.includes(m.key);
+    card.classList.toggle("overridden", isOvr);
+    badge.style.display = isOvr ? "inline-block" : "none";
   });
-  const t = payload.elapsed_seconds.toFixed(1);
-  pushChartPoint(charts.rpm, t, d.rpm);
-  pushChartPoint(charts.vss, t, d.vss);
-  pushChartPoint(charts.throttle_pos, t, d.throttle_pos);
-  pushChartPoint(charts.coolant_temp, t, d.coolant_temp);
+
+  // Push charts using DATASET values so charts show real data trend, not stuck overrides
+  const t = (payload.elapsed_seconds || 0).toFixed(1);
+  if (charts.rpm)          pushChart(charts.rpm,          t, ds.rpm);
+  if (charts.vss)          pushChart(charts.vss,          t, ds.vss);
+  if (charts.throttle_pos) pushChart(charts.throttle_pos, t, ds.throttle_pos);
+  if (charts.coolant_temp) pushChart(charts.coolant_temp, t, ds.coolant_temp);
+
+  // Update dial knobs with DATASET values for non-overridden dials
+  METRICS.forEach(m => {
+    const st = dialState[m.key];
+    if (!st) return;
+    const datasetVal = ds[m.key];
+    if (datasetVal !== null && datasetVal !== undefined) {
+      st.datasetValue = datasetVal;
+    }
+    if (!st.isOverriding) {
+      // Needle follows dataset in real-time
+      updateDialDisplay(m.key, st.datasetValue);
+    }
+    // Keep card highlight in sync
+    const card = document.getElementById(`dial-card-${m.key}`);
+    if (card) card.classList.toggle("is-overriding", st.isOverriding);
+  });
 });
 
 connectWs("/api/ws/logs", (entry) => {
@@ -282,6 +443,229 @@ connectWs("/api/ws/logs", (entry) => {
   box.innerHTML += `<div class="log-${entry.level}">[${time}] ${entry.message}</div>`;
   box.scrollTop = box.scrollHeight;
 });
+
+/* ═══════════════════════════════════════════════════════
+   ROTARY DIAL ENGINE
+═══════════════════════════════════════════════════════ */
+/*
+  SVG knob:
+  - Outer ring: arc showing 270° of travel (from 135° to 405°)
+  - Filled arc: how far the value is from min to max
+  - Dot: the needle tip on the circumference
+  - Center text: current value
+
+  Angle mapping:
+    - min value → 135°  (bottom-left)
+    - max value → 405°  (bottom-right, i.e. 135° + 270°)
+  
+  In SVG coordinate system (0° = 3 o'clock, clockwise):
+    - Start: 225° (135° shifted because SVG 0° ≠ math 90°)
+    - End:   135° (225° + 270°)
+*/
+const DIAL_START_DEG = 225;
+const DIAL_SWEEP_DEG = 270;
+const KNOB_R    = 38;   // radius of the value arc
+const DOT_R     = 3.5;  // radius of the needle dot
+const CENTER    = 45;   // SVG viewBox center
+
+function degToRad(d) { return d * Math.PI / 180; }
+
+function valueToAngle(value, min, max) {
+  const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  return DIAL_START_DEG + pct * DIAL_SWEEP_DEG;
+}
+
+function polarToXY(angleDeg, r) {
+  const a = degToRad(angleDeg);
+  return { x: CENTER + r * Math.cos(a), y: CENTER + r * Math.sin(a) };
+}
+
+function makeArcPath(startDeg, endDeg, r) {
+  const s = polarToXY(startDeg, r);
+  const e = polarToXY(endDeg,   r);
+  const sweep = ((endDeg - startDeg) % 360 + 360) % 360;
+  const large = sweep > 180 ? 1 : 0;
+  return `M ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y}`;
+}
+
+function buildDialSVG(key, meta, value) {
+  const angle    = valueToAngle(value, meta.min, meta.max);
+  const trackEnd = DIAL_START_DEG + DIAL_SWEEP_DEG;
+  const dot      = polarToXY(angle, KNOB_R);
+  const fillPath = makeArcPath(DIAL_START_DEG, angle, KNOB_R);
+  const trackPath= makeArcPath(DIAL_START_DEG, trackEnd, KNOB_R);
+  const disp     = value.toFixed(meta.decimals);
+
+  return `
+<svg viewBox="0 0 90 90" width="90" height="90" id="svg-${key}">
+  <!-- Track ring -->
+  <path d="${trackPath}" fill="none" stroke="var(--dial-track)" stroke-width="6" stroke-linecap="round"/>
+  <!-- Value arc — changes colour when overriding -->
+  <path d="${fillPath}" fill="none" stroke="var(--dial-fill)" stroke-width="6" stroke-linecap="round"
+        id="arc-${key}"/>
+  <!-- Needle dot -->
+  <circle cx="${dot.x}" cy="${dot.y}" r="${DOT_R}" fill="var(--dial-fill)" id="dot-${key}"/>
+  <!-- Center value text -->
+  <text x="${CENTER}" y="${CENTER - 2}" text-anchor="middle" dominant-baseline="middle"
+        font-size="11" font-family="Inter,sans-serif" font-weight="600" fill="var(--text)"
+        id="txt-${key}">${disp}</text>
+</svg>`;
+}
+
+function updateDialDisplay(key, value) {
+  const meta  = METRICS.find(m => m.key === key);
+  const st    = dialState[key];
+  if (!meta || !st) return;
+
+  const v     = Math.max(meta.min, Math.min(meta.max, value));
+  const angle = valueToAngle(v, meta.min, meta.max);
+  const trackEnd = DIAL_START_DEG + DIAL_SWEEP_DEG;
+  const dot   = polarToXY(angle, KNOB_R);
+
+  const arcEl = document.getElementById(`arc-${key}`);
+  const dotEl = document.getElementById(`dot-${key}`);
+  const txtEl = document.getElementById(`txt-${key}`);
+  const valEl = document.getElementById(`dval-${key}`);
+  if (!arcEl || !dotEl || !txtEl) return;
+
+  const fillPath = makeArcPath(DIAL_START_DEG, angle, KNOB_R);
+  arcEl.setAttribute("d", fillPath);
+  dotEl.setAttribute("cx", dot.x);
+  dotEl.setAttribute("cy", dot.y);
+  txtEl.textContent = v.toFixed(meta.decimals);
+  if (valEl) valEl.textContent = v.toFixed(meta.decimals);
+
+  // Colour: amber when overriding, blue otherwise
+  const colour = st.isOverriding ? "var(--dial-override)" : "var(--dial-fill)";
+  arcEl.setAttribute("stroke", colour);
+  dotEl.setAttribute("fill",   colour);
+}
+
+/* Drag-to-rotate interaction */
+function attachDialDrag(key, meta) {
+  const wrap = document.getElementById(`wrap-${key}`);
+  if (!wrap) return;
+
+  let dragging = false;
+  let lastY = 0;
+  const sensitivity = (meta.max - meta.min) / 200; // px to value mapping
+
+  function getOverrideValue() { return dialState[key].overrideValue; }
+  function setOverrideValue(v) {
+    v = Math.max(meta.min, Math.min(meta.max, v));
+    dialState[key].overrideValue = v;
+    return v;
+  }
+
+  function onDown(e) {
+    if (!dialState[key].isOverriding) return; // only drag when locked
+    dragging = true;
+    lastY = e.touches ? e.touches[0].clientY : e.clientY;
+    wrap.classList.add("locked");
+    e.preventDefault();
+  }
+  function onMove(e) {
+    if (!dragging) return;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const dy = lastY - clientY;   // drag up = increase
+    lastY = clientY;
+    const newVal = setOverrideValue(getOverrideValue() + dy * sensitivity);
+    updateDialDisplay(key, newVal);
+    // Debounced API call
+    if (wrap._apiTimer) clearTimeout(wrap._apiTimer);
+    wrap._apiTimer = setTimeout(() => sendDialOverride(key, newVal), 60);
+    e.preventDefault();
+  }
+  function onUp() {
+    dragging = false;
+    wrap.classList.remove("locked");
+  }
+
+  wrap.addEventListener("mousedown",  onDown,  { passive: false });
+  wrap.addEventListener("touchstart", onDown,  { passive: false });
+  document.addEventListener("mousemove", onMove, { passive: false });
+  document.addEventListener("touchmove", onMove, { passive: false });
+  document.addEventListener("mouseup",   onUp);
+  document.addEventListener("touchend",  onUp);
+}
+
+/* Checkbox toggle */
+function onDialToggle(key) {
+  const chk = document.getElementById(`chk-${key}`);
+  const st  = dialState[key];
+  st.isOverriding = chk.checked;
+
+  const card = document.getElementById(`dial-card-${key}`);
+  card.classList.toggle("is-overriding", st.isOverriding);
+
+  if (st.isOverriding) {
+    // Lock at current displayed value (= last dataset value at time of toggle)
+    st.overrideValue = st.datasetValue;
+    updateDialDisplay(key, st.overrideValue);
+    sendDialOverride(key, st.overrideValue);
+  } else {
+    // Release — dial snaps back to dataset on next tick
+    releaseDial(key);
+    updateDialDisplay(key, st.datasetValue);
+  }
+}
+
+/* API calls for dials */
+async function sendDialOverride(key, value) {
+  await fetch(`${API}/api/dials`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ field: key, value })
+  });
+}
+async function releaseDial(key) {
+  await fetch(`${API}/api/dials/${key}`, { method: "DELETE" });
+}
+async function resetAllDials() {
+  // Reset all local state first (snap UI immediately)
+  METRICS.forEach(m => {
+    const st = dialState[m.key];
+    if (!st) return;
+    st.isOverriding = false;
+    st.overrideValue = st.datasetValue;
+    const chk = document.getElementById(`chk-${m.key}`);
+    if (chk) chk.checked = false;
+    const card = document.getElementById(`dial-card-${m.key}`);
+    if (card) card.classList.remove("is-overriding");
+    updateDialDisplay(m.key, st.datasetValue);
+  });
+  // Then tell the server
+  await fetch(`${API}/api/dials`, { method: "DELETE" });
+}
+
+/* Build the dials grid */
+function buildDials() {
+  const grid = document.getElementById("dialsGrid");
+  grid.innerHTML = METRICS.map(m => {
+    const initVal = (m.min + m.max) / 2;
+    dialState[m.key] = { datasetValue: initVal, overrideValue: initVal, isOverriding: false };
+
+    return `
+<div class="dial-card" id="dial-card-${m.key}">
+  <div class="d-label">${m.label}</div>
+  <div class="dial-knob-wrap" id="wrap-${m.key}">
+    ${buildDialSVG(m.key, m, initVal)}
+  </div>
+  <div class="d-value-row">
+    <span class="d-value" id="dval-${m.key}">${initVal.toFixed(m.decimals)}</span>
+    <span class="d-unit">${m.unit}</span>
+  </div>
+  <label class="d-toggle" onclick="event.stopPropagation()">
+    <input type="checkbox" id="chk-${m.key}" onchange="onDialToggle('${m.key}')">
+    Override
+  </label>
+</div>`;
+  }).join("");
+
+  // Attach drag handlers after DOM insertion
+  METRICS.forEach(m => attachDialDrag(m.key, m));
+}
+buildDials();
 </script>
 
 </body>

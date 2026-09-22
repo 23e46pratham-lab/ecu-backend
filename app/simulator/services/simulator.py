@@ -69,6 +69,13 @@ class Simulator:
         self._DRIVER_WINDOW_MIN = 30          # min ticks before driver inference runs
         self._driver_window_index = 0         # monotonic counter
 
+        # Dial override state — maps field name -> override float value.
+        # When a field is present here, its value replaces the dataset reading
+        # in the tick payload. When absent, the dataset reading is used as-is.
+        # This dict is mutated only via the set_dial / release_dial / release_all
+        # methods, which are called from the API layer.
+        self._dial_overrides: dict[str, float] = {}
+
     # ---------- subscription (used by the WebSocket layer) ----------
 
     def subscribe(self, callback: Callable):
@@ -194,6 +201,42 @@ class Simulator:
         self._status.loop = loop
         return self._status
 
+    # ---------- dial overrides ----------
+
+    # Valid sensor field names — the contract between the frontend and the
+    # dataset_manager's STANDARD_COLUMNS list.
+    _VALID_DIAL_FIELDS = frozenset([
+        "coolant_temp", "map_kpa", "rpm", "vss", "intake_air_temp",
+        "maf", "throttle_pos", "ambient_temp", "pedal_d", "pedal_e",
+    ])
+
+    def set_dial(self, field: str, value: float) -> dict:
+        """Override a sensor field with a fixed value. Affects next tick onward."""
+        if field not in self._VALID_DIAL_FIELDS:
+            raise ValueError(f"Unknown sensor field: '{field}'. "
+                             f"Valid fields: {sorted(self._VALID_DIAL_FIELDS)}")
+        self._dial_overrides[field] = float(value)
+        self._emit_log("info", f"Dial override set: {field} = {value}")
+        return dict(self._dial_overrides)
+
+    def release_dial(self, field: str) -> dict:
+        """Release override for one field; it resumes reading from the dataset."""
+        if field not in self._VALID_DIAL_FIELDS:
+            raise ValueError(f"Unknown sensor field: '{field}'")
+        self._dial_overrides.pop(field, None)
+        self._emit_log("info", f"Dial override released: {field}")
+        return dict(self._dial_overrides)
+
+    def release_all_dials(self) -> dict:
+        """Release all active overrides at once."""
+        self._dial_overrides.clear()
+        self._emit_log("info", "All dial overrides released")
+        return {}
+
+    def get_dials(self) -> dict:
+        """Return the current override values (field -> value)."""
+        return dict(self._dial_overrides)
+
     # ---------- state accessors ----------
 
     @property
@@ -219,23 +262,40 @@ class Simulator:
                 await self._pause_event.wait()  # blocks here while paused
 
                 row = df.iloc[self._status.current_row]
+
+                # Build the raw data dict from the dataset row first.
+                raw_data = {
+                    "coolant_temp": _safe_float(row.get("coolant_temp")),
+                    "map_kpa": _safe_float(row.get("map_kpa")),
+                    "rpm": _safe_float(row.get("rpm")),
+                    "vss": _safe_float(row.get("vss")),
+                    "intake_air_temp": _safe_float(row.get("intake_air_temp")),
+                    "maf": _safe_float(row.get("maf")),
+                    "throttle_pos": _safe_float(row.get("throttle_pos")),
+                    "ambient_temp": _safe_float(row.get("ambient_temp")),
+                    "pedal_d": _safe_float(row.get("pedal_d")),
+                    "pedal_e": _safe_float(row.get("pedal_e")),
+                }
+
+                # Merge dial overrides on top (snapshot to avoid race conditions
+                # if the API layer updates overrides mid-tick).
+                active_overrides = dict(self._dial_overrides)
+                effective_data = {**raw_data, **active_overrides}
+
                 payload = {
                     "row_index": int(self._status.current_row),
                     "total_rows": n,
                     "elapsed_seconds": float(row["elapsed_seconds"]),
                     "playback_percent": round(100 * (self._status.current_row + 1) / n, 2),
-                    "data": {
-                        "coolant_temp": _safe_float(row.get("coolant_temp")),
-                        "map_kpa": _safe_float(row.get("map_kpa")),
-                        "rpm": _safe_float(row.get("rpm")),
-                        "vss": _safe_float(row.get("vss")),
-                        "intake_air_temp": _safe_float(row.get("intake_air_temp")),
-                        "maf": _safe_float(row.get("maf")),
-                        "throttle_pos": _safe_float(row.get("throttle_pos")),
-                        "ambient_temp": _safe_float(row.get("ambient_temp")),
-                        "pedal_d": _safe_float(row.get("pedal_d")),
-                        "pedal_e": _safe_float(row.get("pedal_e")),
-                    },
+                    # `data` contains the effective values (dataset + any overrides merged)
+                    "data": effective_data,
+                    # `dataset_data` is always the raw dataset reading — lets the
+                    # frontend keep tracking the true dataset position for dials
+                    # that are not currently overridden.
+                    "dataset_data": raw_data,
+                    # `overrides` tells the frontend exactly which fields are
+                    # currently manually overridden (to drive dial highlight/animation).
+                    "overrides": list(active_overrides.keys()),
                 }
 
                 # ── Accumulate tick in the rolling buffer ──────────────────────
