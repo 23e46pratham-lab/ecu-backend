@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
+import pandas as pd
+
 from app.simulator import config
 from app.simulator.services.dataset_manager import LoadedDataset, dataset_manager
 
@@ -244,6 +246,11 @@ class Simulator:
         return self._status
 
     @property
+    def has_gps(self) -> bool:
+        """True when the currently-loaded dataset has GPS columns merged in."""
+        return self._dataset.has_gps if self._dataset else False
+
+    @property
     def latest_row(self) -> dict:
         return self._latest_row
 
@@ -276,6 +283,19 @@ class Simulator:
                     "pedal_d": _safe_float(row.get("pedal_d")),
                     "pedal_e": _safe_float(row.get("pedal_e")),
                 }
+
+                # Append GPS fields when the dataset has them and this row has a
+                # valid fix. NaN rows (interpolation gaps) are omitted entirely
+                # so the frontend never sees a null position mid-route.
+                if ds.has_gps:
+                    _GPS_FIELDS = [
+                        "lat", "lon", "elevation_m",
+                        "gps_bearing", "gps_speed_ms", "gps_fix",
+                    ]
+                    for field in _GPS_FIELDS:
+                        if field in row.index and pd.notna(row[field]):
+                            precision = 7 if field in ("lat", "lon") else 3
+                            raw_data[field] = round(float(row[field]), precision)
 
                 # Merge dial overrides on top (snapshot to avoid race conditions
                 # if the API layer updates overrides mid-tick).

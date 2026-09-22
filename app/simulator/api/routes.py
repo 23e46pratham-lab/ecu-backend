@@ -49,7 +49,8 @@ class DialSetRequest(BaseModel):
 
 @router.get("/datasets")
 def list_datasets():
-    return {"datasets": dataset_manager.list_datasets()}
+    datasets = dataset_manager.list_datasets()
+    return {"datasets": datasets}
 
 
 @router.post("/upload", status_code=201)
@@ -170,6 +171,81 @@ def get_latest_ml():
     if not simulator.latest_row:
         raise HTTPException(404, "No data yet — start the simulator first")
     return simulator.latest_row.get("ml", {})
+
+
+# ---------- GPS / route endpoints ----------
+
+@router.get("/route")
+def get_route():
+    """
+    Returns the full GPS polyline for the currently-loaded dataset as a list
+    of [lat, lon] pairs.  The frontend calls this once on load to draw the
+    full route on the map before playback starts.
+
+    404 if no dataset is loaded or the dataset has no GPS data.
+    """
+    if not simulator._dataset:
+        raise HTTPException(404, "No dataset loaded")
+    polyline = simulator._dataset.get_route_polyline()
+    if polyline is None:
+        raise HTTPException(404, "Current dataset has no GPS data")
+    return {
+        "has_gps": True,
+        "point_count": len(polyline),
+        "polyline": polyline,
+        "summary": simulator._dataset.gps_summary,
+    }
+
+
+@router.get("/trip-summary")
+def get_trip_summary():
+    """
+    Aggregated OBD + GPS statistics for the currently-loaded dataset.
+    GPS fields (distance, point count, route bounding box) are included
+    only when the dataset has GPS columns; OBD stats are always present.
+    Safe to call at any point — does not require the simulator to be running.
+    """
+    import math
+
+    if not simulator._dataset:
+        raise HTTPException(404, "No dataset loaded")
+
+    df = simulator._dataset.df
+    stats: dict = {}
+
+    # —— Always-available OBD stats ——————————————————————————————
+    if "rpm" in df.columns:
+        stats["avg_rpm"] = round(float(df["rpm"].mean()), 0)
+        stats["max_rpm"] = round(float(df["rpm"].max()), 0)
+    if "vss" in df.columns:
+        stats["avg_speed_kmh"] = round(float(df["vss"].mean()), 1)
+        stats["max_speed_kmh"] = round(float(df["vss"].max()), 1)
+    if "throttle_pos" in df.columns:
+        stats["avg_throttle"] = round(float(df["throttle_pos"].mean()), 1)
+
+    # —— GPS-only stats —————————————————————————————————
+    if simulator.has_gps:
+        def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+            """Return great-circle distance in metres."""
+            R = 6_371_000
+            phi1, phi2 = math.radians(lat1), math.radians(lat2)
+            dphi = math.radians(lat2 - lat1)
+            dlam = math.radians(lon2 - lon1)
+            a = (math.sin(dphi / 2) ** 2
+                 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2)
+            return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        pts = df[["lat", "lon"]].dropna().values.tolist()
+        dist_m = sum(
+            haversine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
+            for i in range(len(pts) - 1)
+        )
+        stats["distance_km"] = round(dist_m / 1000, 2)
+        stats["gps_points"] = len(pts)
+        stats["route_summary"] = simulator._dataset.gps_summary
+
+    return {"trip_stats": stats, "has_gps": simulator.has_gps}
+
 
 
 def _status_dict(status) -> dict:

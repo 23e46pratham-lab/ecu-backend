@@ -6,6 +6,8 @@
 <title>OBD-II Simulator Control Panel — AutoVue</title>
 <meta name="description" content="AutoVue ECU simulator dashboard: real-time OBD-II data, sensor override dials, ML inference results.">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   :root {
@@ -135,6 +137,94 @@
   }
   .d-toggle input[type=checkbox] { accent-color: var(--dial-override); width: 14px; height: 14px; cursor: pointer; }
   .dial-card.is-overriding .d-toggle { color: var(--dial-override); }
+
+  /* ═══════════════════════════════════════════
+     GPS PANEL
+  ═══════════════════════════════════════════ */
+  #gpsPanel { display: none; }
+  #gpsPanel.gps-visible { display: block; }
+
+  .gps-layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 16px;
+  }
+  @media (max-width: 900px) {
+    .gps-layout { grid-template-columns: 1fr; }
+  }
+
+  /* Map container */
+  #gpsMap {
+    height: 320px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #0d1017;
+  }
+  /* Override Leaflet tiles to blend with dark theme */
+  .leaflet-tile { filter: brightness(0.75) saturate(0.7) hue-rotate(195deg); }
+  .leaflet-container { background: #0d1017; }
+
+  /* GPS metric cards */
+  .gps-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    align-content: start;
+  }
+  .gps-card {
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    transition: border-color 0.3s;
+  }
+  .gps-card.fix-real  { border-color: rgba(48,201,122,0.4); }
+  .gps-card.fix-interp{ border-color: rgba(79,140,255,0.25); }
+  .gps-card .gc-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .gps-card .gc-value { font-size: 20px; font-weight: 700; margin-top: 4px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .gps-card .gc-unit  { font-size: 11px; color: var(--muted); font-weight: 400; }
+
+  /* Fix badge */
+  .fix-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 20px; margin-top: 6px;
+  }
+  .fix-badge.real  { background: rgba(48,201,122,0.12); color: var(--good); border: 1px solid rgba(48,201,122,0.3); }
+  .fix-badge.interp{ background: rgba(79,140,255,0.10); color: var(--accent); border: 1px solid rgba(79,140,255,0.25); }
+  .fix-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .fix-dot.real  { background: var(--good); box-shadow: 0 0 5px var(--good); }
+  .fix-dot.interp{ background: var(--accent); }
+
+  /* Bearing compass */
+  .bearing-wrap {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .compass-ring {
+    width: 54px; height: 54px;
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    position: relative;
+    background: var(--panel);
+    flex-shrink: 0;
+  }
+  .compass-needle {
+    position: absolute; top: 50%; left: 50%;
+    width: 2px; height: 22px;
+    background: linear-gradient(to bottom, var(--bad) 50%, var(--muted) 50%);
+    border-radius: 1px;
+    transform-origin: 50% 100%;
+    transform: translate(-50%, -100%) rotate(0deg);
+    transition: transform 0.4s ease;
+  }
+  .compass-label {
+    position: absolute; font-size: 8px; font-weight: 700; color: var(--muted);
+  }
+  .compass-label.n { top: 2px; left: 50%; transform: translateX(-50%); color: var(--bad); }
+  .compass-label.s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+  .compass-label.e { right: 3px; top: 50%; transform: translateY(-50%); }
+  .compass-label.w { left: 3px; top: 50%; transform: translateY(-50%); }
 </style>
 </head>
 <body>
@@ -231,6 +321,79 @@
     </div>
     <div class="dials-grid" id="dialsGrid"></div>
   </div>
+
+  <!-- ── Full-width: GPS Route Panel (shown only when dataset has GPS) ── -->
+  <div class="panel" id="gpsPanel">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+      <div>
+        <div class="panel-title" style="margin-bottom:2px;">📍 GPS Route &amp; Position</div>
+        <div style="font-size:11px; color:var(--muted);">Live position from merged GPS dataset · Route drawn on load</div>
+      </div>
+      <div id="gpsBadge" style="font-size:11px; color:var(--muted);">—</div>
+    </div>
+
+    <div class="gps-layout">
+      <!-- Map -->
+      <div id="gpsMap"></div>
+
+      <!-- GPS metric cards -->
+      <div class="gps-cards">
+
+        <!-- Lat -->
+        <div class="gps-card" id="gc-lat">
+          <div class="gc-label">Latitude</div>
+          <div class="gc-value" id="gv-lat">—</div>
+          <div class="gc-unit">° N/S</div>
+        </div>
+
+        <!-- Lon -->
+        <div class="gps-card" id="gc-lon">
+          <div class="gc-label">Longitude</div>
+          <div class="gc-value" id="gv-lon">—</div>
+          <div class="gc-unit">° E/W</div>
+        </div>
+
+        <!-- Elevation -->
+        <div class="gps-card" id="gc-elev">
+          <div class="gc-label">Elevation</div>
+          <div class="gc-value" id="gv-elev">—</div>
+          <div class="gc-unit">m asl</div>
+        </div>
+
+        <!-- GPS Speed -->
+        <div class="gps-card" id="gc-spd">
+          <div class="gc-label">GPS Speed</div>
+          <div class="gc-value" id="gv-spd">—</div>
+          <div class="gc-unit">m/s</div>
+        </div>
+
+        <!-- Bearing (full-width with compass) -->
+        <div class="gps-card" style="grid-column:1/-1;">
+          <div class="gc-label" style="margin-bottom:8px;">Bearing</div>
+          <div style="display:flex; align-items:center; gap:16px;">
+            <div class="compass-ring" id="compassRing">
+              <div class="compass-needle" id="compassNeedle"></div>
+              <span class="compass-label n">N</span>
+              <span class="compass-label s">S</span>
+              <span class="compass-label e">E</span>
+              <span class="compass-label w">W</span>
+            </div>
+            <div>
+              <div class="gc-value" id="gv-bearing">—</div>
+              <div class="gc-unit">degrees</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fix status (full-width) -->
+        <div class="gps-card" style="grid-column:1/-1;" id="gc-fix">
+          <div class="gc-label">Fix Type</div>
+          <div id="gv-fix"><span class="fix-badge interp"><span class="fix-dot interp"></span>Waiting…</span></div>
+        </div>
+
+      </div><!-- .gps-cards -->
+    </div><!-- .gps-layout -->
+  </div><!-- #gpsPanel -->
 
 </main>
 
@@ -340,7 +503,21 @@ async function loadDatasets() {
     </div>`).join("") || `<div style="color:var(--muted); font-size:12px;">No datasets found</div>`;
 }
 async function selectDataset(id) {
-  activeDatasetId = id;
+  if (activeDatasetId !== id) {
+    activeDatasetId = id;
+    // Immediately hide GPS panel when swapping datasets
+    const panel = document.getElementById("gpsPanel");
+    if (panel) panel.classList.remove("gps-visible");
+    if (typeof gpsMap !== "undefined" && gpsMap) {
+      gpsMap.remove(); gpsMap = null; gpsMarker = null; gpsPolyline = null;
+    }
+    if (typeof gpsRouteLoaded !== "undefined") gpsRouteLoaded = false;
+    if (typeof gpsPanelVisible !== "undefined") gpsPanelVisible = false;
+    if (typeof _lastPollDatasetId !== "undefined") _lastPollDatasetId = id;
+    
+    // Fetch route for the new dataset immediately
+    if (typeof loadGpsRoute === "function") loadGpsRoute(id);
+  }
   await callApi("change-dataset", { dataset_id: id });
   loadDatasets();
 }
@@ -435,6 +612,13 @@ connectWs("/api/ws/live", (payload) => {
     const card = document.getElementById(`dial-card-${m.key}`);
     if (card) card.classList.toggle("is-overriding", st.isOverriding);
   });
+
+  // ── GPS panel update ──────────────────────────────────────────────────
+  if ("lat" in d && d.lat !== null && d.lat !== undefined) {
+    showGpsPanel();
+    updateGpsCards(d);
+    updateGpsMarker(d.lat, d.lon);
+  }
 });
 
 connectWs("/api/ws/logs", (entry) => {
@@ -666,6 +850,158 @@ function buildDials() {
   METRICS.forEach(m => attachDialDrag(m.key, m));
 }
 buildDials();
+
+/* ═══════════════════════════════════════════════════════
+   GPS PANEL
+═══════════════════════════════════════════════════════ */
+let gpsMap = null;
+let gpsMarker = null;
+let gpsPolyline = null;
+let gpsPanelVisible = false;
+let gpsRouteLoaded = false;
+let gpsLastDatasetId = null;   // track dataset changes
+
+// Custom pulsing marker icon
+const carIcon = L.divIcon({
+  className: "",
+  html: `<div style="
+    width:14px; height:14px;
+    border-radius:50%;
+    background:#4f8cff;
+    border:3px solid #fff;
+    box-shadow:0 0 0 3px rgba(79,140,255,0.4), 0 0 12px rgba(79,140,255,0.6);
+  "></div>`,
+  iconSize: [14, 14],
+  iconAnchor: [7, 7]
+});
+
+function initMap(centerLat, centerLon, zoom) {
+  if (gpsMap) return;   // already initialised
+  gpsMap = L.map("gpsMap", { zoomControl: true, attributionControl: false })
+            .setView([centerLat, centerLon], zoom || 14);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "© OpenStreetMap"
+  }).addTo(gpsMap);
+
+  // Subtle attribution in bottom-right
+  L.control.attribution({ prefix: "<a href='https://openstreetmap.org/copyright'>OSM</a>" }).addTo(gpsMap);
+
+  gpsMarker = L.marker([centerLat, centerLon], { icon: carIcon }).addTo(gpsMap);
+}
+
+async function loadGpsRoute(forceDatasetId) {
+  const dsId = forceDatasetId || activeDatasetId;
+  if (!dsId || gpsRouteLoaded && gpsLastDatasetId === dsId) return;
+  gpsLastDatasetId = dsId;
+
+  let res;
+  try { res = await fetch(`${API}/api/route`); }
+  catch { return; }   // server may not be up yet
+
+  if (!res.ok) return;  // 404 = no GPS in this dataset — panel stays hidden
+  const data = await res.json();
+  if (!data.has_gps || !data.polyline.length) return;
+
+  gpsRouteLoaded = true;
+  const pts = data.polyline;   // [[lat,lon],...]
+  const s   = data.summary;
+
+  // Initialise map centred on route
+  initMap(s.center.lat, s.center.lon, 13);
+
+  // Draw the full route
+  if (gpsPolyline) gpsPolyline.remove();
+  gpsPolyline = L.polyline(pts, {
+    color: "#4f8cff",
+    weight: 3,
+    opacity: 0.65
+  }).addTo(gpsMap);
+
+  // Fit map to route bounding box
+  gpsMap.fitBounds([
+    [s.bbox.min_lat, s.bbox.min_lon],
+    [s.bbox.max_lat, s.bbox.max_lon]
+  ], { padding: [24, 24] });
+
+  // Badge summary
+  const badge = document.getElementById("gpsBadge");
+  badge.innerHTML = `<span style="color:var(--good); font-weight:600;">${data.point_count.toLocaleString()} GPS pts</span>
+    &nbsp;·&nbsp; bbox ${s.bbox.min_lat.toFixed(3)}°–${s.bbox.max_lat.toFixed(3)}° N`;
+
+  showGpsPanel();
+}
+
+function showGpsPanel() {
+  if (gpsPanelVisible) return;
+  gpsPanelVisible = true;
+  document.getElementById("gpsPanel").classList.add("gps-visible");
+  // Leaflet needs a size recalculation after the element becomes visible
+  setTimeout(() => gpsMap && gpsMap.invalidateSize(), 100);
+}
+
+function updateGpsMarker(lat, lon) {
+  if (!gpsMap) {
+    // First GPS tick before route loaded — initialise map here
+    initMap(lat, lon, 15);
+    showGpsPanel();
+  }
+  if (!gpsMarker) {
+    gpsMarker = L.marker([lat, lon], { icon: carIcon }).addTo(gpsMap);
+  } else {
+    gpsMarker.setLatLng([lat, lon]);
+  }
+  // Pan map to keep car visible (without jarring recentre if zoomed out)
+  if (!gpsMap.getBounds().contains([lat, lon])) {
+    gpsMap.panTo([lat, lon], { animate: true, duration: 0.5 });
+  }
+}
+
+function updateGpsCards(d) {
+  const fmt = (v, dec) => v === null || v === undefined ? "—" : Number(v).toFixed(dec);
+
+  document.getElementById("gv-lat").textContent     = fmt(d.lat, 6);
+  document.getElementById("gv-lon").textContent     = fmt(d.lon, 6);
+  document.getElementById("gv-elev").textContent    = fmt(d.elevation_m, 1);
+  document.getElementById("gv-spd").textContent     = fmt(d.gps_speed_ms, 2);
+
+  // Bearing + compass needle
+  const bearing = d.gps_bearing;
+  document.getElementById("gv-bearing").textContent = fmt(bearing, 1);
+  if (bearing !== null && bearing !== undefined) {
+    const needle = document.getElementById("compassNeedle");
+    if (needle) needle.style.transform = `translate(-50%, -100%) rotate(${bearing}deg)`;
+  }
+
+  // Fix type badge
+  const isFix = d.gps_fix === 1;
+  const fixEl = document.getElementById("gv-fix");
+  fixEl.innerHTML = isFix
+    ? `<span class="fix-badge real"><span class="fix-dot real"></span>Real GPS fix</span>`
+    : `<span class="fix-badge interp"><span class="fix-dot interp"></span>Interpolated</span>`;
+  const fixCard = document.getElementById("gc-fix");
+  fixCard.className = `gps-card ${isFix ? "fix-real" : "fix-interp"}`;
+}
+
+// Try to load the GPS route whenever the status poll picks up a new dataset
+let _lastPollDatasetId = null;
+const _origPollStatus = pollStatus;
+pollStatus = async function() {
+  await _origPollStatus();
+  if (activeDatasetId && activeDatasetId !== _lastPollDatasetId) {
+    _lastPollDatasetId = activeDatasetId;
+    gpsRouteLoaded = false;   // force reload on dataset change
+    gpsPanelVisible = false;
+    document.getElementById("gpsPanel").classList.remove("gps-visible");
+    // Re-init map for new dataset
+    if (gpsMap) { gpsMap.remove(); gpsMap = null; gpsMarker = null; gpsPolyline = null; }
+    await loadGpsRoute(activeDatasetId);
+  }
+};
+
+// Initial route load
+loadGpsRoute();
 </script>
 
 </body>

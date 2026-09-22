@@ -25,6 +25,7 @@ Part of the *AutoVue — Smart Vehicle ECU Monitoring and Predictive Maintenance
   - [Simulator — Playback Control](#simulator--playback-control)
   - [Simulator — Live Data & ML](#simulator--live-data--ml)
   - [Simulator — Sensor Override Dials](#simulator--sensor-override-dials)
+  - [Simulator — GPS Route Integration](#simulator--gps-route-integration)
   - [Simulator — WebSockets](#simulator--websockets)
   - [System](#system)
 - [Standard Sensor Field Reference](#standard-sensor-field-reference)
@@ -569,6 +570,139 @@ Releases the override for a single field; it resumes reading from the dataset.
 
 ---
 
+### Simulator — GPS Route Integration
+
+AutoVue supports GPS-enriched datasets for map-based trip replay during
+presentations and post-drive analysis. GPS data is pre-merged into the
+OBD CSV externally and uploaded like any other dataset. No separate GPS
+file upload is needed.
+
+#### Preparing a GPS-enriched dataset
+
+Use the bundled `merge_gps_obd.py` script (at the project root):
+
+```bash
+# Merge OBD CSV with a GPSLogger CSV log:
+python merge_gps_obd.py --obd datasets/normal.csv --gps 20260917131011.csv
+
+# Merge with a GPX file directly:
+python merge_gps_obd.py --obd datasets/normal.csv --gps 20260917.gpx
+
+# Loop the GPS track if the OBD drive is longer than the GPS recording:
+python merge_gps_obd.py --obd datasets/normal.csv --gps track.gpx --loop
+
+# Output lands in datasets/normal_with_gps.csv — upload it via the simulator.
+```
+
+The script auto-detects GPSLogger CSV, track_points CSV (GPX→CSV
+converted), and raw GPX files. GPS coordinates are linearly interpolated
+between fixes so every OBD row (even at 1 Hz) has a smooth position.
+
+#### GPS columns added to the dataset
+
+| Column | Description |
+|---|---|
+| `lat` | Latitude (decimal degrees) |
+| `lon` | Longitude (decimal degrees) |
+| `elevation_m` | Elevation above sea level (metres) |
+| `gps_bearing` | Heading 0–360° |
+| `gps_speed_ms` | Speed from GPS (m/s) |
+| `gps_fix` | 1 = real fix, 0 = interpolated between fixes |
+
+#### New REST endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/route` | Full polyline (`[[lat,lon],...]`) for the loaded dataset |
+| `GET /api/trip-summary` | Aggregated OBD + GPS stats (distance, avg speed, etc.) |
+
+##### `GET /api/route`
+
+Returns the complete GPS polyline for the currently-loaded dataset.
+The frontend calls this once on load to draw the full route before
+playback starts. Returns `404` if no dataset is loaded or the dataset
+has no GPS columns.
+
+**Response `200`**
+```json
+{
+  "has_gps": true,
+  "point_count": 30817,
+  "polyline": [[12.9134521, 74.9018832], [12.9134612, 74.9018901], "..."],
+  "summary": {
+    "has_gps": true,
+    "point_count": 30817,
+    "bbox": { "min_lat": 12.89, "max_lat": 12.94, "min_lon": 74.88, "max_lon": 74.93 },
+    "center": { "lat": 12.915, "lon": 74.906 }
+  }
+}
+```
+
+##### `GET /api/trip-summary`
+
+Returns aggregated trip statistics. OBD stats are always present;
+GPS stats (distance, point count, bounding box) appear only when the
+dataset has GPS columns. Safe to call at any point — the simulator does
+not need to be running.
+
+**Response `200` — GPS dataset**
+```json
+{
+  "has_gps": true,
+  "trip_stats": {
+    "avg_rpm": 1320.0,
+    "max_rpm": 5800.0,
+    "avg_speed_kmh": 34.2,
+    "max_speed_kmh": 112.0,
+    "avg_throttle": 18.4,
+    "distance_km": 28.47,
+    "gps_points": 30817,
+    "route_summary": { "..." }
+  }
+}
+```
+
+**Response `200` — non-GPS dataset**
+```json
+{
+  "has_gps": false,
+  "trip_stats": {
+    "avg_rpm": 1320.0,
+    "max_rpm": 5800.0,
+    "avg_speed_kmh": 34.2,
+    "max_speed_kmh": 112.0,
+    "avg_throttle": 18.4
+  }
+}
+```
+
+#### WebSocket
+
+When the loaded dataset contains GPS columns, every WebSocket tick
+automatically includes `lat`, `lon`, `elevation_m`, `gps_bearing`,
+`gps_speed_ms`, and `gps_fix` inside the `data` object. Datasets without
+GPS work exactly as before — no GPS keys appear.
+
+```js
+ws.onmessage = (event) => {
+  const tick = JSON.parse(event.data);
+  if ("lat" in tick.data) {
+    // GPS dataset — update the map marker
+    map.setCenter([tick.data.lat, tick.data.lon]);
+  }
+};
+```
+
+#### Backward compatibility
+
+Datasets without GPS columns work identically to before. The frontend
+detects GPS availability by checking for the presence of `lat` in a
+tick's `data` object and hides or shows the map panel accordingly.
+The `GET /api/route` and `GET /api/trip-summary` endpoints return `404`
+when no GPS data is present, so the frontend can gracefully degrade.
+
+---
+
 ### Simulator — WebSockets
 
 #### `WS /api/ws/live`
@@ -808,7 +942,7 @@ self-contained package instead of being fused directly into `main.py`.
 - [x] ~~Fuel efficiency estimation (BiLSTM + Attention)~~
 - [x] ~~Sensor override dials — force any OBD sensor to a fixed value mid-playback for live demos~~
 - [x] ~~Bundled anomaly dataset (`test_anomaly.csv`) for triggering anomaly model during presentations~~
-- [ ] Location dataset integration (GPS log with lat/lon/elevation/speed — merge with OBD data for map display)
+- [x] ~~GPS route integration — pre-merged datasets stream lat/lon/elevation per tick over WS; `/api/route` returns full polyline; `/api/trip-summary` returns distance + OBD stats~~
 - [ ] Composite Vehicle Health Score (0–100, weighted aggregation)
 - [ ] Predictive maintenance / Remaining Useful Life forecasting
 - [ ] DTC (Diagnostic Trouble Code) retrieval and decoding

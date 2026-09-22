@@ -27,6 +27,12 @@ STANDARD_COLUMNS = [
     "maf", "throttle_pos", "ambient_temp", "pedal_d", "pedal_e",
 ]
 
+# GPS columns added by merge_gps_obd.py. Only "lat" and "lon" are required;
+# the optional columns are included when present.
+GPS_REQUIRED = {"lat", "lon"}
+GPS_OPTIONAL = {"elevation_m", "gps_bearing", "gps_speed_ms", "gps_fix"}
+GPS_ALL = GPS_REQUIRED | GPS_OPTIONAL
+
 # Keyword-based matching instead of exact string matching, because dataset
 # exports vary in exact punctuation/encoding of the header row (e.g. the
 # degree sign). Matching on a stable keyword is far more robust than
@@ -142,6 +148,44 @@ class LoadedDataset:
     row_count: int
     duration_seconds: float
     missing_value_report: dict = field(default_factory=dict)
+    has_gps: bool = False
+
+    @property
+    def gps_summary(self) -> dict | None:
+        """Return bounding-box + centre stats for the GPS track, or None if no GPS."""
+        if not self.has_gps:
+            return None
+        lats = self.df["lat"].dropna()
+        lons = self.df["lon"].dropna()
+        return {
+            "has_gps": True,
+            "point_count": len(lats),
+            "bbox": {
+                "min_lat": float(lats.min()),
+                "max_lat": float(lats.max()),
+                "min_lon": float(lons.min()),
+                "max_lon": float(lons.max()),
+            },
+            "center": {
+                "lat": float(lats.mean()),
+                "lon": float(lons.mean()),
+            },
+        }
+
+    def get_route_polyline(self) -> list[list[float]] | None:
+        """
+        Return the full GPS track as [[lat, lon], ...] — one entry per dataset
+        row that has a valid fix. Returns None if the dataset has no GPS columns.
+        Called by GET /api/route so the frontend can draw the full path on load.
+        """
+        if not self.has_gps:
+            return None
+        return (
+            self.df[["lat", "lon"]]
+            .dropna()
+            .apply(lambda r: [round(r["lat"], 7), round(r["lon"], 7)], axis=1)
+            .tolist()
+        )
 
 
 def _clean_dataframe(raw_df: pd.DataFrame, source_name: str) -> LoadedDataset:
@@ -152,11 +196,25 @@ def _clean_dataframe(raw_df: pd.DataFrame, source_name: str) -> LoadedDataset:
             rename_map[col] = std
     df = raw_df.rename(columns=rename_map)
 
+    # Detect GPS columns before filtering — GPS cols have exact lowercase names
+    # added by merge_gps_obd.py, so no keyword matching is needed.
+    cols_lower_set = {c.lower() for c in df.columns}
+    has_gps = GPS_REQUIRED.issubset(cols_lower_set)
+    gps_present = [c for c in df.columns if c.lower() in GPS_ALL] if has_gps else []
+    if has_gps:
+        logger.info("Dataset '%s': GPS columns detected: %s", source_name, gps_present)
+
     keep_cols = [c for c in STANDARD_COLUMNS + ["time_raw"] if c in df.columns]
+    # Append GPS columns so they survive into the cleaned DataFrame.
+    keep_cols += [c for c in gps_present if c not in keep_cols]
     df = df[keep_cols].copy()
 
     numeric_cols = [c for c in STANDARD_COLUMNS if c in df.columns]
     for c in numeric_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Coerce GPS columns to numeric as well (handles any stray string tokens).
+    for c in gps_present:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     missing_report = {c: int(df[c].isna().sum()) for c in numeric_cols}
@@ -171,6 +229,8 @@ def _clean_dataframe(raw_df: pd.DataFrame, source_name: str) -> LoadedDataset:
     elif config.MISSING_VALUE_STRATEGY == "zero":
         df[numeric_cols] = df[numeric_cols].fillna(0.0)
     # "keep_null" -> leave NaN as-is; API layer converts NaN -> null in JSON
+    # GPS columns intentionally keep NaN for rows without a fix — the tick
+    # builder skips NaN GPS values rather than broadcasting stale coordinates.
 
     if "time_raw" in df.columns:
         elapsed = _parse_time_to_seconds(df["time_raw"])
@@ -191,6 +251,7 @@ def _clean_dataframe(raw_df: pd.DataFrame, source_name: str) -> LoadedDataset:
         row_count=len(df),
         duration_seconds=max(duration, 0.0),
         missing_value_report=missing_report,
+        has_gps=has_gps,
     )
 
 
