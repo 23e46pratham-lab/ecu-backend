@@ -968,7 +968,7 @@ self-contained package instead of being fused directly into `main.py`.
 - [x] ~~Sensor override dials — force any OBD sensor to a fixed value mid-playback for live demos~~
 - [x] ~~Bundled anomaly dataset (`test_anomaly.csv`) for triggering anomaly model during presentations~~
 - [x] ~~GPS route integration — pre-merged datasets stream lat/lon/elevation per tick over WS; `/api/route` returns full polyline; `/api/trip-summary` returns distance + OBD stats~~
-- [x] DTC (Diagnostic Trouble Code) retrieval and decoding
+- [x] ~~DTC (Diagnostic Trouble Code) retrieval and decoding~~
 - [ ] Composite Vehicle Health Score (0–100, weighted aggregation)
 - [ ] Predictive maintenance / Remaining Useful Life forecasting
 
