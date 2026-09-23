@@ -45,6 +45,10 @@ class DialSetRequest(BaseModel):
     value: float
 
 
+class DtcRequest(BaseModel):
+    codes: list[str]
+
+
 # ---------- dataset endpoints ----------
 
 @router.get("/datasets")
@@ -300,6 +304,41 @@ def release_dial(field: str):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"overrides": overrides}
+
+
+
+# ---------- DTC (Diagnostic Trouble Code) endpoints ----------
+
+@router.get("/dtc")
+def get_dtcs():
+    """Returns the currently active DTC fault code list."""
+    return {"dtcs": simulator.get_dtcs()}
+
+
+@router.post("/dtc")
+def set_dtcs(body: DtcRequest):
+    """
+    Replace the active DTC list with the supplied codes.
+    Codes are normalised to uppercase (e.g. ``P0300``).
+    Pass an empty list to clear all active codes.
+    When at least one code is active the simulator broadcast payload includes
+    a ``dtcs`` key; when the list is empty the key is omitted entirely so
+    existing clients are unaffected.
+    """
+    codes = simulator.set_dtcs(body.codes)
+    return {"dtcs": codes}
+
+
+@router.delete("/dtc")
+def clear_all_dtcs():
+    """Clears all active DTC fault codes."""
+    return {"dtcs": simulator.clear_dtcs()}
+
+
+@router.delete("/dtc/{code}")
+def clear_single_dtc(code: str):
+    """Removes a single DTC fault code. Silently succeeds if the code is not active."""
+    return {"dtcs": simulator.clear_dtc(code)}
 
 
 # ---------- WebSocket endpoints ----------

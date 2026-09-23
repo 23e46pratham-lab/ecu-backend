@@ -78,6 +78,12 @@ class Simulator:
         # methods, which are called from the API layer.
         self._dial_overrides: dict[str, float] = {}
 
+        # DTC (Diagnostic Trouble Code) injection state.
+        # List of OBD-II fault code strings (e.g. ["P0300", "P0171"]).
+        # Codes are included in the broadcast payload only when this list is
+        # non-empty, so existing clients that don't handle DTCs are unaffected.
+        self._active_dtcs: list[str] = []
+
     # ---------- subscription (used by the WebSocket layer) ----------
 
     def subscribe(self, callback: Callable):
@@ -239,6 +245,36 @@ class Simulator:
         """Return the current override values (field -> value)."""
         return dict(self._dial_overrides)
 
+    # ---------- DTC injection ----------
+
+    def set_dtcs(self, codes: list[str]) -> list[str]:
+        """Replace the active DTC list with the given codes.
+        Codes are normalised to uppercase. Pass an empty list to clear all."""
+        self._active_dtcs = [c.strip().upper() for c in codes if c.strip()]
+        if self._active_dtcs:
+            self._emit_log("warning", f"DTCs injected: {', '.join(self._active_dtcs)}")
+        else:
+            self._emit_log("info", "All DTCs cleared")
+        return list(self._active_dtcs)
+
+    def clear_dtcs(self) -> list[str]:
+        """Clear all active DTCs."""
+        self._active_dtcs.clear()
+        self._emit_log("info", "All DTCs cleared")
+        return []
+
+    def clear_dtc(self, code: str) -> list[str]:
+        """Remove a single DTC code (case-insensitive). Silently ignored if not present."""
+        code = code.strip().upper()
+        if code in self._active_dtcs:
+            self._active_dtcs.remove(code)
+            self._emit_log("info", f"DTC cleared: {code}")
+        return list(self._active_dtcs)
+
+    def get_dtcs(self) -> list[str]:
+        """Return the current active DTC list."""
+        return list(self._active_dtcs)
+
     # ---------- state accessors ----------
 
     @property
@@ -317,6 +353,12 @@ class Simulator:
                     # currently manually overridden (to drive dial highlight/animation).
                     "overrides": list(active_overrides.keys()),
                 }
+
+                # Attach active DTCs to the payload only when codes are set
+                # (backward-compatible: key absent means no fault codes active).
+                active_dtcs = list(self._active_dtcs)
+                if active_dtcs:
+                    payload["dtcs"] = active_dtcs
 
                 # ── Accumulate tick in the rolling buffer ──────────────────────
                 self._tick_buffer.append(payload["data"])

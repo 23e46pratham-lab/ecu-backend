@@ -570,6 +570,31 @@ Releases the override for a single field; it resumes reading from the dataset.
 
 ---
 
+### Simulator — Diagnostic Trouble Codes (DTCs)
+
+Endpoints to inject OBD-II fault codes (e.g. `P0300`, `P0171`) into the live stream.
+When active, the broadcast payload includes a `dtcs` array. When cleared, the key
+is omitted entirely so existing consumers that don't support DTCs are unaffected.
+
+#### `GET /api/dtc`
+Returns the currently active fault codes.
+**Response `200`:** `{"dtcs": ["P0300", "P0171"]}`
+
+#### `POST /api/dtc`
+Replaces the active fault code list. Pass an empty array to clear all. Codes are auto-uppercased.
+**Request body:** `{"codes": ["P0300", "U0100"]}`
+**Response `200`:** `{"dtcs": ["P0300", "U0100"]}`
+
+#### `DELETE /api/dtc`
+Clears all active fault codes.
+**Response `200`:** `{"dtcs": []}`
+
+#### `DELETE /api/dtc/{code}`
+Removes a specific fault code (case-insensitive).
+**Response `200`:** `{"dtcs": ["P0300"]}`
+
+---
+
 ### Simulator — GPS Route Integration
 
 AutoVue supports GPS-enriched datasets for map-based trip replay during

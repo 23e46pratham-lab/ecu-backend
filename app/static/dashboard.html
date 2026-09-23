@@ -225,6 +225,19 @@
   .compass-label.s { bottom: 2px; left: 50%; transform: translateX(-50%); }
   .compass-label.e { right: 3px; top: 50%; transform: translateY(-50%); }
   .compass-label.w { left: 3px; top: 50%; transform: translateY(-50%); }
+
+  /* ═══════════════════════════════════════════
+     DTC PANEL
+  ═══════════════════════════════════════════ */
+  .dtc-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .dtc-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .dtc-select { flex: 1; min-width: 200px; background: #1a2035; border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 13px; }
+  .dtc-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; min-height: 28px; }
+  .dtc-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(240,79,99,0.15); border: 1px solid rgba(240,79,99,0.3); color: var(--bad); padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .dtc-badge button { background: none; border: none; color: var(--bad); cursor: pointer; padding: 0 4px; font-size: 14px; opacity: 0.7; }
+  .dtc-badge button:hover { opacity: 1; }
+  .dtc-indicator { display: none; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; text-transform: uppercase; background: rgba(240,79,99,0.15); color: var(--bad); border: 1px solid rgba(240,79,99,0.3); animation: blink 1.5s infinite; }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 </style>
 </head>
 <body>
@@ -285,7 +298,10 @@
     <!-- Right column -->
     <div style="display:flex; flex-direction:column; gap:16px;">
       <div class="panel">
-        <div class="panel-title">Live Vehicle Data</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+          <div class="panel-title" style="margin:0;">Live Vehicle Data</div>
+          <div id="dtcIndicator" class="dtc-indicator">FAULT</div>
+        </div>
         <div class="metric-grid" id="metricGrid"></div>
       </div>
 
@@ -320,6 +336,40 @@
       </button>
     </div>
     <div class="dials-grid" id="dialsGrid"></div>
+  </div>
+
+  <!-- ── Full-width: DTC Fault Codes ── -->
+  <div class="panel">
+    <div class="dtc-panel-header">
+      <div>
+        <div class="panel-title" style="margin-bottom:2px;">DTC Fault Codes</div>
+        <div style="font-size:11px; color:var(--muted);">
+          Inject Diagnostic Trouble Codes into the live telemetry stream
+        </div>
+      </div>
+      <button class="danger" onclick="clearAllDtcs()" style="font-size:12px; padding:6px 14px;">
+        Clear All DTCs
+      </button>
+    </div>
+    
+    <div class="dtc-row">
+      <select id="dtcSelect" class="dtc-select">
+        <option value="" disabled selected>Select a DTC to inject...</option>
+        <option value="P0300">P0300 - Random/Multiple Cylinder Misfire Detected</option>
+        <option value="P0171">P0171 - System Too Lean (Bank 1)</option>
+        <option value="P0420">P0420 - Catalyst System Efficiency Below Threshold</option>
+        <option value="P0128">P0128 - Coolant Thermostat (Coolant Temp Below Regulating Temp)</option>
+        <option value="P0133">P0133 - Oxygen Sensor Circuit Slow Response</option>
+        <option value="P0455">P0455 - Evaporative Emission System Leak Detected (Gross Leak)</option>
+        <option value="C1201">C1201 - Engine Control System Fault (Brake System)</option>
+        <option value="U0100">U0100 - Lost Communication With ECM/PCM "A"</option>
+      </select>
+      <button class="primary" onclick="injectDtc()">Inject DTC</button>
+    </div>
+
+    <div class="dtc-badges" id="dtcBadges">
+      <!-- Active DTC badges go here -->
+    </div>
   </div>
 
   <!-- ── Full-width: GPS Route Panel (shown only when dataset has GPS) ── -->
@@ -618,6 +668,17 @@ connectWs("/api/ws/live", (payload) => {
     showGpsPanel();
     updateGpsCards(d);
     updateGpsMarker(d.lat, d.lon);
+  }
+
+  // Handle DTC Indicator
+  const dtcIndicator = document.getElementById("dtcIndicator");
+  if (dtcIndicator) {
+    if (d.dtcs && d.dtcs.length > 0) {
+      dtcIndicator.style.display = "inline-block";
+      dtcIndicator.textContent = `${d.dtcs.length} FAULT(S)`;
+    } else {
+      dtcIndicator.style.display = "none";
+    }
   }
 });
 
@@ -1002,6 +1063,64 @@ pollStatus = async function() {
 
 // Initial route load
 loadGpsRoute();
+
+/* ═══════════════════════════════════════════════════════
+   DTC PANEL LOGIC
+═══════════════════════════════════════════════════════ */
+async function loadDtcs() {
+  try {
+    const data = await fetch(`${API}/api/dtc`).then(r => r.json());
+    renderDtcs(data.dtcs || []);
+  } catch (err) {
+    renderDtcs([]);
+  }
+}
+async function injectDtc() {
+  const sel = document.getElementById("dtcSelect");
+  const code = sel.value;
+  if (!code) return;
+  // Get current
+  try {
+    const data = await fetch(`${API}/api/dtc`).then(r => r.json());
+    let current = data.dtcs || [];
+    if (!current.includes(code)) {
+      current.push(code);
+      const res = await callApi("dtc", { codes: current });
+      renderDtcs(res.dtcs || []);
+    }
+    sel.value = "";
+  } catch (err) {
+    console.error("Failed to inject DTC:", err);
+  }
+}
+async function clearAllDtcs() {
+  try {
+    const data = await fetch(`${API}/api/dtc`, { method: "DELETE" }).then(r => r.json());
+    renderDtcs(data.dtcs || []);
+  } catch (err) {
+    console.error("Failed to clear DTCs:", err);
+  }
+}
+async function removeDtc(code) {
+  try {
+    const data = await fetch(`${API}/api/dtc/${code}`, { method: "DELETE" }).then(r => r.json());
+    renderDtcs(data.dtcs || []);
+  } catch (err) {
+    console.error("Failed to remove DTC:", err);
+  }
+}
+function renderDtcs(dtcs) {
+  const box = document.getElementById("dtcBadges");
+  if (!box) return;
+  if (!dtcs || dtcs.length === 0) {
+    box.innerHTML = `<span style="font-size:11px; color:var(--muted); font-style:italic;">No active faults</span>`;
+    return;
+  }
+  box.innerHTML = dtcs.map(code => 
+    `<div class="dtc-badge">${code} <button onclick="removeDtc('${code}')">×</button></div>`
+  ).join("");
+}
+loadDtcs();
 </script>
 
 </body>
