@@ -378,6 +378,9 @@
       <div>
         <div class="panel-title" style="margin-bottom:2px;">📍 GPS Route &amp; Position</div>
         <div style="font-size:11px; color:var(--muted);">Live position from merged GPS dataset · Route drawn on load</div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; margin-top:10px;">
+          <input type="checkbox" id="useGpsSpeedCheck" onchange="setSpeedSource()"> Override OBD Speed with calculated GPS Speed
+        </label>
       </div>
       <div id="gpsBadge" style="font-size:11px; color:var(--muted);">—</div>
     </div>
@@ -540,6 +543,9 @@ async function setSpeed(s) {
 async function setLoop() {
   await callApi("loop", { loop: document.getElementById("loopCheck").checked });
 }
+async function setSpeedSource() {
+  await callApi("speed-source", { use_gps_speed: document.getElementById("useGpsSpeedCheck").checked });
+}
 async function loadDatasets() {
   const { datasets } = await fetch(`${API}/api/datasets`).then(r => r.json());
   const box = document.getElementById("datasetList");
@@ -597,6 +603,8 @@ async function pollStatus() {
   document.getElementById("statSpeed").textContent = `${s.speed}x`;
   document.getElementById("statDataset").textContent = s.dataset_name || "-";
   document.querySelectorAll("#speedBtns button").forEach(b => b.classList.toggle("active", +b.dataset.speed === s.speed));
+  const gpsCheck = document.getElementById("useGpsSpeedCheck");
+  if (gpsCheck) gpsCheck.checked = !!s.use_gps_speed;
 }
 setInterval(pollStatus, 2000);
 pollStatus();

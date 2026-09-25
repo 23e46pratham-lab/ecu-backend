@@ -44,6 +44,7 @@ class SimulatorStatus:
     elapsed_playback_seconds: float = 0.0
     dataset_duration_seconds: float = 0.0
     started_at: float | None = None
+    use_gps_speed: bool = False
 
 
 class Simulator:
@@ -208,6 +209,11 @@ class Simulator:
     def set_loop(self, loop: bool):
         self._status.loop = loop
         return self._status
+        
+    def set_use_gps_speed(self, use_gps_speed: bool):
+        self._status.use_gps_speed = use_gps_speed
+        self._emit_log("info", f"Use GPS speed set to {use_gps_speed}")
+        return self._status
 
     # ---------- dial overrides ----------
 
@@ -332,6 +338,9 @@ class Simulator:
                         if field in row.index and pd.notna(row[field]):
                             precision = 7 if field in ("lat", "lon") else 3
                             raw_data[field] = round(float(row[field]), precision)
+                            
+                    if self._status.use_gps_speed and "gps_speed_ms" in raw_data and raw_data["gps_speed_ms"] is not None:
+                        raw_data["vss"] = round(raw_data["gps_speed_ms"] * 3.6, 1)
 
                 # Merge dial overrides on top (snapshot to avoid race conditions
                 # if the API layer updates overrides mid-tick).

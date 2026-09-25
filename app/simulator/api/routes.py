@@ -31,6 +31,10 @@ class LoopRequest(BaseModel):
     loop: bool
 
 
+class SpeedSourceRequest(BaseModel):
+    use_gps_speed: bool
+
+
 class ChangeDatasetRequest(BaseModel):
     dataset_id: str
 
@@ -152,6 +156,11 @@ def set_loop(body: LoopRequest):
     return _status_dict(simulator.set_loop(body.loop))
 
 
+@router.post("/speed-source")
+def set_speed_source(body: SpeedSourceRequest):
+    return _status_dict(simulator.set_use_gps_speed(body.use_gps_speed))
+
+
 @router.get("/status")
 def get_status():
     return _status_dict(simulator.status)
@@ -261,6 +270,7 @@ def _status_dict(status) -> dict:
         "total_rows": status.total_rows,
         "speed": status.speed,
         "loop": status.loop,
+        "use_gps_speed": status.use_gps_speed,
         "elapsed_playback_seconds": round(status.elapsed_playback_seconds, 1),
         "dataset_duration_seconds": round(status.dataset_duration_seconds, 1),
         "playback_percent": round(100 * status.current_row / status.total_rows, 2) if status.total_rows else 0,

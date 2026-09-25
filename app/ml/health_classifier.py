@@ -141,6 +141,7 @@ def classify_vehicle_health(tick_window: list[dict]) -> dict:
     triggered = [
         col for i, col in enumerate(FEATURE_COLS)
         if per_feature_error[i] > (_per_feature_thresholds.get(col, float("inf")) * SENSITIVITY_MULTIPLIER)
+        and per_feature_error[i] >= 0.5
     ]
     is_anomaly = len(triggered) > 0
 
